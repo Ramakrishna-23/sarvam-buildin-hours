@@ -18,10 +18,77 @@ from livekit import api
 
 from . import config
 from .offline_pipeline import FIXTURE_META, stream_run
+from .replay import stream_replay
 
 ROOT = Path(__file__).parent.parent
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 FIXTURES_DIR = ROOT / "fixtures"
+SCENARIOS_DIR = ROOT / "scenarios"
+
+
+async def _sse(request: web.Request, source) -> web.StreamResponse:
+    """Stream an async generator of dicts as server-sent events."""
+    resp = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+    await resp.prepare(request)
+    try:
+        async for evt in source:
+            if request.transport is not None and request.transport.is_closing():
+                break
+            payload = json.dumps(evt, ensure_ascii=False)
+            try:
+                await resp.write(f"data: {payload}\n\n".encode())
+            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                break
+    except (
+        ClientConnectionResetError,
+        ConnectionResetError,
+        BrokenPipeError,
+        asyncio.CancelledError,
+    ):
+        pass
+    except Exception as exc:
+        try:
+            err = json.dumps({"tag": "run.error", "message": str(exc)}, ensure_ascii=False)
+            await resp.write(f"data: {err}\n\n".encode())
+        except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+            pass
+    return resp
+
+
+async def scenarios_handler(_request: web.Request) -> web.Response:
+    items = []
+    for path in sorted(SCENARIOS_DIR.glob("*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+        items.append(
+            {
+                "file": path.name,
+                "name": data.get("name", path.stem),
+                "description": data.get("description", ""),
+                "turns": len(data.get("turns", [])),
+                "expect": data.get("expect", {}),
+            }
+        )
+    return web.json_response(items)
+
+
+async def scenario_run_handler(request: web.Request) -> web.StreamResponse:
+    name = request.query.get("scenario", "pickup_fail.json")
+    use_llm = request.query.get("llm", "0") not in ("0", "false", "")
+    mediate = request.query.get("mediate", "0") not in ("0", "false", "")
+    path = SCENARIOS_DIR / Path(name).name
+    if not path.exists():
+        return web.json_response({"error": f"scenario not found: {name}"}, status=404)
+    return await _sse(request, stream_replay(path, use_llm, mediate))
 
 
 async def token_handler(request: web.Request) -> web.Response:
@@ -118,6 +185,8 @@ def build_app() -> web.Application:
     app.router.add_get("/api/token", token_handler)
     app.router.add_get("/api/fixtures", fixtures_handler)
     app.router.add_get("/api/offline-run", offline_run_handler)
+    app.router.add_get("/api/scenarios", scenarios_handler)
+    app.router.add_get("/api/scenario-run", scenario_run_handler)
     app.router.add_get("/", spa_handler)
     app.router.add_get("/{path:.*}", spa_handler)
     return app

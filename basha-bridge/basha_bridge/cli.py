@@ -85,6 +85,11 @@ def main() -> None:
     p_serve = sub.add_parser("serve", help="serve the demo frontend + token API")
     p_serve.add_argument("--port", type=int, default=8080)
 
+    p_replay = sub.add_parser("replay", help="replay drift scenarios offline")
+    p_replay.add_argument("scenario", nargs="+")
+    p_replay.add_argument("--llm", action="store_true", help="use sarvam-105b")
+    p_replay.add_argument("--mediate", action="store_true", help="run mediation turns")
+
     args = parser.parse_args()
 
     if args.check or args.cmd == "check":
@@ -97,6 +102,15 @@ def main() -> None:
         from .server import run_server
 
         run_server(args.port)
+    elif args.cmd == "replay":
+        from pathlib import Path
+
+        from .replay import replay
+
+        rc = 0
+        for name in args.scenario:
+            rc |= asyncio.run(replay(Path(name), args.llm, args.mediate))
+        sys.exit(rc)
     else:
         parser.print_help()
 

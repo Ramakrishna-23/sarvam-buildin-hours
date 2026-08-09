@@ -1,0 +1,13 @@
+{
+  "name": "wake_phrase",
+  "description": "Either party can summon the agent directly, skipping the ladder.",
+  "expect": {
+    "final_state": "ACTIVE_MEDIATION",
+    "reaches": ["ACTIVE_MEDIATION"]
+  },
+  "turns": [
+    { "role": "rider",  "lang": "hi-IN", "t": 0.0, "text": "आप कहाँ हैं भैया?" },
+    { "role": "driver", "lang": "kn-IN", "t": 3.0, "text": "ಗೊತ್ತಾಗ್ತಾ ಇಲ್ಲ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 6.0, "text": "एजेंट, थोड़ी मदद करो प्लीज़।" }
+  ]
+}

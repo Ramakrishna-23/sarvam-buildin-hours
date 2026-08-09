@@ -1,0 +1,16 @@
+{
+  "name": "pickup_fail",
+  "description": "Hindi rider, Kannada driver. Repeated confusion, pickup point never agreed.",
+  "expect": {
+    "final_state": "OFFER_HELP",
+    "reaches": ["WATCH", "OFFER_HELP"]
+  },
+  "turns": [
+    { "role": "rider",  "lang": "hi-IN", "t": 0.0,  "text": "हैलो भैया, आप कहाँ हैं?" },
+    { "role": "driver", "lang": "kn-IN", "t": 3.0,  "text": "ಹಲೋ, ನಾನು ಬರ್ತಾ ಇದ್ದೀನಿ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 6.0,  "text": "मैं गेट के पास खड़ा हूँ, आप कहाँ हैं?" },
+    { "role": "driver", "lang": "kn-IN", "t": 9.0,  "text": "ಏನು? ಅರ್ಥ ಆಗಲಿಲ್ಲ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 12.0, "text": "गेट के पास। आप कहाँ हैं?" },
+    { "role": "driver", "lang": "kn-IN", "t": 15.0, "text": "ಸಾರಿ, ಏನು ಹೇಳ್ತಿದೀರಾ ಗೊತ್ತಾಗಲಿಲ್ಲ." }
+  ]
+}

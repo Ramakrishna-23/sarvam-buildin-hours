@@ -1,0 +1,18 @@
+{
+  "name": "mediation_happy_path",
+  "description": "Full Phase 6 demo: breakdown, offer, rider accepts, agent mediates to a resolved pickup. Run with --llm --mediate.",
+  "expect": {
+    "reaches": ["OFFER_HELP", "ACTIVE_MEDIATION"]
+  },
+  "turns": [
+    { "role": "rider",  "lang": "hi-IN", "t": 0.0,  "text": "हैलो, आप कहाँ पहुँचे?" },
+    { "role": "driver", "lang": "kn-IN", "t": 3.0,  "text": "ಏನು? ಅರ್ಥ ಆಗಲಿಲ್ಲ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 6.0,  "text": "आप कहाँ पहुँचे?" },
+    { "role": "driver", "lang": "kn-IN", "t": 9.0,  "text": "ಕ್ಷಮಿಸಿ, ಏನು ಹೇಳ್ತಿದೀರಾ ಗೊತ್ತಾಗಲಿಲ್ಲ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 13.0, "text": "हाँ ठीक है, मदद चाहिए।" },
+    { "role": "rider",  "lang": "hi-IN", "t": 18.0, "text": "मैं मैजेस्टिक मेट्रो के गेट दो पर हूँ, चाय की दुकान के पास।" },
+    { "role": "driver", "lang": "kn-IN", "t": 24.0, "text": "ನಾನು ಮೆಜೆಸ್ಟಿಕ್ ಬಸ್ ನಿಲ್ದಾಣದ ಹತ್ತಿರ ಇದ್ದೀನಿ." },
+    { "role": "driver", "lang": "kn-IN", "t": 30.0, "text": "ಸರಿ, ಐದು ನಿಮಿಷದಲ್ಲಿ ಗೇಟ್ ಎರಡು ಹತ್ತಿರ ಬರ್ತೀನಿ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 36.0, "text": "ठीक है, मैं यहीं रुकता हूँ।" }
+  ]
+}

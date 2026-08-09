@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { EventLog } from "../components/EventLog";
 import { FixturePanel } from "../components/FixturePanel";
 import { LatencyTable } from "../components/LatencyTable";
+import { MediationPanel } from "../components/MediationPanel";
 import { PipelineTimeline } from "../components/PipelineTimeline";
+import { ScenarioPanel } from "../components/ScenarioPanel";
 import { TranscriptPanel } from "../components/TranscriptPanel";
 import { VoiceMeter } from "../components/VoiceMeter";
 import { useBusEvents } from "../hooks/useBusEvents";
@@ -41,41 +43,79 @@ export function DebugDashboard() {
     push
   );
   const [fixtureRunning, setFixtureRunning] = useState(false);
+  const [scenarioRunning, setScenarioRunning] = useState(false);
+  const [scenarioResult, setScenarioResult] = useState<{
+    passed?: boolean;
+    final_state?: string;
+    path?: string[];
+    failures?: string[];
+  } | null>(null);
 
   const latencyRows = useMemo(() => latencyFromEvents(events), [events]);
   const lastEar = [...events].reverse().find((e) => e.tag === "segment.spoken")?.ear_ms as
     | number
     | undefined;
 
+  const consumeSse = async (url: string, onEvent: (evt: BusEvent) => void) => {
+    const res = await fetch(url);
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() ?? "";
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        try {
+          onEvent(JSON.parse(line.slice(6)) as BusEvent);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  };
+
   const runFixture = async (fixture: string, tgt: string) => {
     reset();
     setFixtureRunning(true);
     try {
-      const res = await fetch(
-        `/api/offline-run?fixture=${encodeURIComponent(fixture)}&tgt=${encodeURIComponent(tgt)}`
+      await consumeSse(
+        `/api/offline-run?fixture=${encodeURIComponent(fixture)}&tgt=${encodeURIComponent(tgt)}`,
+        push
       );
-      const reader = res.body?.getReader();
-      if (!reader) return;
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n");
-        buf = parts.pop() ?? "";
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith("data: ")) continue;
-          try {
-            push(JSON.parse(line.slice(6)) as BusEvent);
-          } catch {
-            /* ignore */
-          }
-        }
-      }
     } finally {
       setFixtureRunning(false);
+    }
+  };
+
+  const runScenario = async (file: string, llm: boolean, mediate: boolean) => {
+    reset();
+    setScenarioResult(null);
+    setScenarioRunning(true);
+    try {
+      await consumeSse(
+        `/api/scenario-run?scenario=${encodeURIComponent(file)}&llm=${llm ? 1 : 0}&mediate=${
+          mediate ? 1 : 0
+        }`,
+        (evt) => {
+          push(evt);
+          if (evt.tag === "scenario.complete") {
+            setScenarioResult({
+              passed: Boolean(evt.passed),
+              final_state: String(evt.final_state ?? ""),
+              path: (evt.path as string[]) ?? [],
+              failures: (evt.failures as string[]) ?? [],
+            });
+          }
+        }
+      );
+    } finally {
+      setScenarioRunning(false);
     }
   };
 
@@ -115,8 +155,13 @@ export function DebugDashboard() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <TranscriptPanel events={events} me={identity} />
+        <ScenarioPanel onRun={runScenario} running={scenarioRunning} result={scenarioResult} />
         <LatencyTable rows={latencyRows} lastEarMs={lastEar} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <TranscriptPanel events={events} me={identity} />
+        <MediationPanel events={events} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

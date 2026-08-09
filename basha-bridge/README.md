@@ -51,10 +51,46 @@ green), then both directions interpret continuously. Live captions, translated
 segments, and an ear-to-ear latency ticker stream over the room data channel.
 
 Tuning env vars: `BB_LOCK_FINALS` (finals needed to lock a language, default 1),
-`BB_LOCK_MIN_CONF` (default 0.5).
+`BB_LOCK_MIN_CONF` (default 0.5), `BB_MEDIATION=0` to disable the drift engine
+and run as a pure interpreter.
+
+## Drift engine & mediation (Phase 5/6)
+
+The agent is silent by default. It watches for *drift* — confusion, repeated
+questions, stalled task slots, frustration — and climbs an escalation ladder:
+
+```
+PASSIVE_MONITOR → WATCH → OFFER_HELP → ACTIVE_MEDIATION → RESOLVED
+ANY_STATE → SAFETY_ESCALATION
+```
+
+Different languages alone is **not** drift (weighted below the WATCH
+threshold): it takes a comprehension or task-progress failure to escalate.
+
+Once mediating, the agent pauses both translation pipelines, takes the floor,
+and asks one targeted question at a time until the pickup slots
+(`pickup_point · driver_location · eta · agreed_next_action`) are filled, then
+gives a bilingual summary and steps back.
+
+Replay scenarios offline — no audio, no WebRTC:
+
+```bash
+uv run basha-bridge replay scenarios/*.json              # rules only, deterministic
+uv run basha-bridge replay scenarios/pickup_fail.json --llm
+uv run basha-bridge replay scenarios/mediation_happy_path.json --llm --mediate
+```
+
+Scenarios carry assertions (`expect.final_state`, `expect.reaches`,
+`expect.never`) and the harness exits non-zero on a mismatch. They are also
+runnable from the dashboard's **Drift scenarios** panel, which visualizes the
+ladder, drift score, signals, task slots, and agent actions live.
+
+`--llm` adds one `sarvam-105b` call per turn (frustration, contradiction,
+safety, slot extraction) via forced tool-calling; without it the engine runs on
+rules alone, which is what the unit tests exercise.
 
 ## Tests
 
 ```bash
-uv run pytest -q   # chunker commit-policy unit tests, no network
+uv run pytest -q   # chunker + drift/ladder unit tests, no network
 ```

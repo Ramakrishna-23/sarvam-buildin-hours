@@ -1,0 +1,16 @@
+{
+  "name": "smooth_same_language",
+  "description": "Both speak Hindi and coordinate fine. The agent must stay silent — this is the contrast demo.",
+  "expect": {
+    "final_state": "PASSIVE_MONITOR",
+    "never": ["WATCH", "OFFER_HELP", "ACTIVE_MEDIATION"]
+  },
+  "turns": [
+    { "role": "rider",  "lang": "hi-IN", "t": 0.0,  "text": "भैया, मैं गेट नंबर दो पर हूँ।" },
+    { "role": "driver", "lang": "hi-IN", "t": 3.0,  "text": "ठीक है, मैं दो मिनट में पहुँचता हूँ।" },
+    { "role": "rider",  "lang": "hi-IN", "t": 6.0,  "text": "चाय की दुकान के पास खड़ा हूँ।" },
+    { "role": "driver", "lang": "hi-IN", "t": 9.0,  "text": "हाँ देख लिया, आ रहा हूँ।" },
+    { "role": "rider",  "lang": "hi-IN", "t": 12.0, "text": "ठीक है, इंतज़ार कर रहा हूँ।" },
+    { "role": "driver", "lang": "hi-IN", "t": 15.0, "text": "पहुँच गया, सफेद गाड़ी है।" }
+  ]
+}

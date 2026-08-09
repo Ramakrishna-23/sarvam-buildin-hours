@@ -16,8 +16,13 @@ from livekit import api, rtc
 from sarvamai import AsyncSarvamAI
 
 from . import config
+from .conversation import ConversationMemory, Turn
+from .drift import DriftEngine, State, offer_reply
+from .mediator import TurnManager, assess, next_action, summary_text
 from .pipeline import SAMPLE_RATE, DirectionPipeline
 from .stt_realtime import SttSession
+from .translate import translate_segment
+from .tts import synth_segment_pcm
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +30,9 @@ AGENT_IDENTITY = "agent"
 LOCK_FINALS = int(os.getenv("BB_LOCK_FINALS", "1"))
 LOCK_MIN_CONF = float(os.getenv("BB_LOCK_MIN_CONF", "0.5"))
 FRAME_BYTES = SAMPLE_RATE * 2 // 10  # 100 ms
+MEDIATION_ON = os.getenv("BB_MEDIATION", "1") != "0"
+
+OFFER_TEXT = "I can help sort out the pickup. Should I help?"
 
 
 class Participant:
@@ -45,6 +53,12 @@ class AgentSession:
         self.room = rtc.Room()
         self.people: dict[str, Participant] = {}
         self.locked = False
+        # Phase 5/6
+        self.memory = ConversationMemory()
+        self.drift = DriftEngine(self.memory)
+        self.turns = TurnManager()
+        self._brain_lock = asyncio.Lock()
+        self._offered = False
 
     # ── bus ───────────────────────────────────────────────────────────────
 
@@ -106,6 +120,12 @@ class AgentSession:
             p = self.people[identity]
             if p.pipeline is not None:
                 await p.pipeline.on_stt_event(msg)
+            if MEDIATION_ON and getattr(msg, "event", None) == "transcript.final":
+                text = (msg.text or "").strip()
+                if text:
+                    asyncio.create_task(
+                        self._brain(identity, text, getattr(msg, "language", None))
+                    )
 
         person.stt = SttSession(
             self.client, on_event=on_stt_event, language_code="auto", name=person.identity
@@ -158,6 +178,149 @@ class AgentSession:
             {"tag": "pair.locked", "pair": {a.identity: a.lang, b.identity: b.lang}}
         )
         log.info("pair locked: %s=%s %s=%s", a.identity, a.lang, b.identity, b.lang)
+
+    # ── Phase 5/6: drift engine + mediation ───────────────────────────────
+
+    def _role(self, identity: str) -> str:
+        if identity in ("rider", "driver"):
+            return identity
+        order = list(self.people)
+        return "rider" if order and order[0] == identity else "driver"
+
+    def _person_for(self, role: str) -> Participant | None:
+        for identity, person in self.people.items():
+            if self._role(identity) == role:
+                return person
+        return None
+
+    def _set_paused(self, paused: bool) -> None:
+        for person in self.people.values():
+            if person.pipeline is not None:
+                person.pipeline.paused = paused
+
+    async def _brain(self, identity: str, text: str, lang: str | None) -> None:
+        """One drift assessment per finalized utterance, serialized."""
+        async with self._brain_lock:
+            role = self._role(identity)
+
+            if self.drift.state == State.OFFER_HELP:
+                reply = offer_reply(text)
+                if reply == "yes":
+                    self.drift.accept_offer()
+                elif reply == "no":
+                    self.drift.decline_offer()
+
+            self.memory.add(
+                Turn(role=role, text=text, lang=lang, t=asyncio.get_event_loop().time())
+            )
+            try:
+                assessment = await assess(self.client, self.memory)
+            except Exception:
+                log.exception("assess failed")
+                return
+            changed_slots = self.memory.slots.update(assessment.slots)
+            result = self.drift.evaluate(assessment)
+
+            await self.emit(
+                {
+                    "tag": "agent.state",
+                    "state": result.state.value,
+                    "score": result.score,
+                    "signals": result.signals,
+                    "evidence": result.evidence[:3],
+                }
+            )
+            if changed_slots:
+                await self.emit(
+                    {
+                        "tag": "slots.updated",
+                        "changed": changed_slots,
+                        "slots": self.memory.slots.values,
+                        "missing": self.memory.slots.missing_required,
+                    }
+                )
+            try:
+                await self._act(role)
+            except Exception:
+                log.exception("mediation action failed")
+
+    async def _act(self, last_speaker_role: str) -> None:
+        state = self.drift.state
+
+        if state == State.SAFETY_ESCALATION:
+            self._set_paused(True)
+            await self._speak("both", "This sounds like an emergency. Connecting you to support now.")
+            return
+
+        if state == State.OFFER_HELP and not self._offered:
+            self._offered = True
+            await self._speak("both", OFFER_TEXT)
+            return
+
+        if state != State.ACTIVE_MEDIATION:
+            self._set_paused(False)
+            return
+
+        # agent owns the floor while mediating
+        self._set_paused(True)
+        if not self.turns.should_act(last_speaker_role):
+            return
+
+        if self.memory.slots.complete:
+            await self._speak("both", summary_text(self.memory))
+            self.drift.resolve()
+            await self.emit({"tag": "agent.state", "state": State.RESOLVED.value,
+                             "score": 0, "signals": [], "evidence": []})
+            self.drift.back_to_monitor()
+            self._offered = False
+            self.turns = TurnManager()
+            self._set_paused(False)
+            return
+
+        action = await next_action(self.client, self.memory)
+        self.turns.record(action)
+        await self.emit(
+            {
+                "tag": "mediation.action",
+                "action": action.action,
+                "target": action.target,
+                "utterance": action.utterance,
+                "reason": action.reason,
+            }
+        )
+        await self._speak(action.target, action.utterance)
+        self.memory.add(Turn(role="agent", text=action.utterance))
+
+    async def _speak(self, target: str, text_en: str) -> None:
+        """Translate an English mediator line into each listener's language and
+        queue it on their outbound track."""
+        targets = (
+            [p for p in self.people.values()]
+            if target == "both"
+            else [p for p in [self._person_for(target)] if p is not None]
+        )
+        for person in targets:
+            if not person.lang:
+                continue  # pre-lock: stay silent
+            try:
+                localized = await translate_segment(
+                    self.client, text_en, "en-IN", person.lang
+                )
+                pcm = await synth_segment_pcm(
+                    self.client, localized, person.lang, sample_rate=SAMPLE_RATE
+                )
+            except Exception:
+                log.exception("agent speech failed for %s", person.identity)
+                continue
+            await self.emit(
+                {
+                    "tag": "agent.speech",
+                    "target": person.identity,
+                    "text_en": text_en,
+                    "text": localized,
+                }
+            )
+            await person.out_pcm.put((pcm, {"direction": "agent"}))
 
     # ── playback ──────────────────────────────────────────────────────────
 

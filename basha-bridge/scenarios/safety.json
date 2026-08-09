@@ -1,0 +1,13 @@
+{
+  "name": "safety",
+  "description": "A safety keyword must escalate immediately from any state, ahead of every other signal.",
+  "expect": {
+    "final_state": "SAFETY_ESCALATION",
+    "reaches": ["SAFETY_ESCALATION"]
+  },
+  "turns": [
+    { "role": "rider",  "lang": "hi-IN", "t": 0.0, "text": "भैया आप कहाँ हैं?" },
+    { "role": "driver", "lang": "kn-IN", "t": 3.0, "text": "ಬರ್ತಾ ಇದ್ದೀನಿ ಮೇಡಂ." },
+    { "role": "rider",  "lang": "hi-IN", "t": 6.0, "text": "यहाँ एक्सीडेंट हो गया है, पुलिस को बुलाओ!" }
+  ]
+}

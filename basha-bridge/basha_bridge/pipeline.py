@@ -59,6 +59,7 @@ class DirectionPipeline:
         self.src_lang: str | None = None
         self.tgt_lang: str | None = None
         self.active = False
+        self.paused = False  # true during ACTIVE_MEDIATION: agent owns the floor
         self.chunker = IncrementalChunker()
         self._seg_q: asyncio.Queue[Segment] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
@@ -126,8 +127,8 @@ class DirectionPipeline:
                 extra = self._seg_q.get_nowait()
                 merged_text += " " + extra.text
                 merged += 1
-            if not (self.active and self.src_lang and self.tgt_lang):
-                continue  # pre-lock: captions only, no audio
+            if not (self.active and self.src_lang and self.tgt_lang) or self.paused:
+                continue  # pre-lock or mediating: captions only, no audio
             try:
                 await self._speak(merged_text, first_pending, seg, merged)
             except Exception:
