@@ -24,13 +24,15 @@ Tasks:
 
 **Goal:** every Sarvam API wrapped and proven against fixtures, no WebRTC involved.
 
+Use the official `sarvamai` Python SDK (`AsyncSarvamAI`) as the default client; drop to raw `websockets` only where the SDK falls short.
+
 Tasks:
-- `stt_stream.py` — saaras:v3 WS, `mode=transcribe`, `vad_signals=true`, 16 kHz pcm_s16le
-- `stt_rest.py` — batch STT with `language_code=unknown` → detected language + confidence; `/text-lid` re-check
-- `translate.py` — mayura:v1, `modern-colloquial`, `output_script=fully-native`; Indic-aware sentence splitter (1000-char limit); glossary/OTP placeholder swap + restore
-- `transliterate.py` — entity passthrough for names/place names
-- `tts_stream.py` — bulbul:v3 WS, keepalive pings, pre-warmed spare socket
-- `chat.py` — sarvam-105b-conversations with strict JSON schema
+- `stt_stream.py` — SDK `speech_to_text_streaming.connect()`, saaras:v3, `mode=transcribe`, `vad_signals=true`, 16 kHz pcm_s16le; check if `language_code="unknown"` works well enough on streaming to simplify Phase 4
+- `stt_rest.py` — SDK batch STT with `language_code=unknown` → detected language + confidence; `/text-lid` re-check
+- `translate.py` — SDK translate, mayura:v1, `modern-colloquial`, `output_script=fully-native`; Indic-aware sentence splitter (1000-char limit); glossary/OTP placeholder swap + restore
+- `transliterate.py` — SDK transliterate for names/place names
+- `tts_stream.py` — bulbul:v3 streaming; **verify SDK supports streaming TTS + client-side cancel for barge-in** — if not, raw WS with keepalive pings + pre-warmed spare socket
+- `chat.py` — sarvam-105b-conversations with strict JSON schema (SDK chat, or OpenAI SDK against `api.sarvam.ai/v1` if JSON-schema mode is easier there)
 
 **Artifact:** `uv run python -m basha_bridge.offline_pipeline fixtures/kn_otp.wav`
 → prints transcript → native-script Hindi translation → writes `out.wav` → prints per-stage latency.
