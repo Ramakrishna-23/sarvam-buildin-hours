@@ -31,7 +31,7 @@ Tasks:
 - `stt_rest.py` — SDK batch STT with `language_code=unknown` → detected language + confidence; `/text-lid` re-check
 - `translate.py` — SDK translate, mayura:v1, `modern-colloquial`, `output_script=fully-native`; Indic-aware sentence splitter (1000-char limit); glossary/OTP placeholder swap + restore
 - `transliterate.py` — SDK transliterate for names/place names
-- `tts_stream.py` — bulbul:v3 streaming; **verify SDK supports streaming TTS + client-side cancel for barge-in** — if not, raw WS with keepalive pings + pre-warmed spare socket
+- `tts_stream.py` — bulbul:v3 streaming; SDK has `text_to_speech_streaming` + `convert_stream` (confirmed in Phase 0) — verify client-side cancel for barge-in; raw WS fallback only if socket control is insufficient. Note: bulbul:v3 has its own speaker set (v2 voices rejected); confirmed working: amit, priya, rohan, ritu
 - `chat.py` — sarvam-105b-conversations with strict JSON schema (SDK chat, or OpenAI SDK against `api.sarvam.ai/v1` if JSON-schema mode is easier there)
 
 **Artifact:** `uv run python -m basha_bridge.offline_pipeline fixtures/kn_otp.wav`
