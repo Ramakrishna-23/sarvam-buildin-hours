@@ -33,7 +33,7 @@ class SimulatedParticipant:
         self,
         room_name: str,
         identity: str,
-        fixture: Path,
+        fixtures: list[Path],
         *,
         start_delay: float = 0.0,
         repeat: int = 1,
@@ -42,7 +42,7 @@ class SimulatedParticipant:
     ) -> None:
         self.room_name = room_name
         self.identity = identity
-        self.fixture = fixture
+        self.fixtures = fixtures
         self.start_delay = start_delay
         self.repeat = repeat
         self.gap_s = gap_s
@@ -52,11 +52,13 @@ class SimulatedParticipant:
         self._recv_task: asyncio.Task | None = None
 
     async def run(self) -> int:
-        with wave.open(str(self.fixture), "rb") as w:
-            assert w.getframerate() == SAMPLE_RATE and w.getnchannels() == 1, (
-                f"fixture must be {SAMPLE_RATE} Hz mono"
-            )
-            pcm = w.readframes(w.getnframes())
+        takes: list[tuple[str, bytes]] = []
+        for path in self.fixtures:
+            with wave.open(str(path), "rb") as w:
+                assert w.getframerate() == SAMPLE_RATE and w.getnchannels() == 1, (
+                    f"{path.name} must be {SAMPLE_RATE} Hz mono"
+                )
+                takes.append((path.name, w.readframes(w.getnframes())))
 
         token = (
             api.AccessToken(config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET)
@@ -101,9 +103,10 @@ class SimulatedParticipant:
             await self._silence(source, self.start_delay)
 
         for i in range(self.repeat):
-            log.info("[%s] speaking %s (take %d)", self.identity, self.fixture.name, i + 1)
-            await self._publish_pcm(source, pcm)
-            await self._silence(source, self.gap_s)
+            for name, pcm in takes:
+                log.info("[%s] speaking %s (round %d)", self.identity, name, i + 1)
+                await self._publish_pcm(source, pcm)
+                await self._silence(source, self.gap_s)
 
         # linger so the agent's reply has time to arrive
         await self._silence(source, 8.0)
@@ -162,13 +165,16 @@ async def run_simulation(
     room: str, identity: str, fixture: str, delay: float, repeat: int, record: str | None
 ) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    path = Path(fixture)
-    if not path.exists():
-        path = ROOT / "fixtures" / fixture
+    paths = []
+    for name in fixture.split(","):
+        p = Path(name.strip())
+        if not p.exists():
+            p = ROOT / "fixtures" / name.strip()
+        paths.append(p)
     sim = SimulatedParticipant(
         room,
         identity,
-        path,
+        paths,
         start_delay=delay,
         repeat=repeat,
         record_to=Path(record) if record else None,

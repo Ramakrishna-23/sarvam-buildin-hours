@@ -107,14 +107,35 @@ def is_question(text: str) -> bool:
     return any(q in text for q in QUESTION_MARKS)
 
 
+# Vocatives and fillers carry no content when comparing two questions.
+_FILLERS = {
+    "अरे", "भैया", "ना", "जी", "हाँ", "तो", "यार", "सुनो", "बताइए", "बोलो",
+    "ಸ್ವಾಮಿ", "ಅಣ್ಣ", "ಸರ್", "ಹೇಳಿ", "ಅಲ್ಲ", "ಸ್ವಲ್ಪ",
+}
+
+
+def _content_words(text: str) -> set[str]:
+    return {
+        w.strip("?।!,.")
+        for w in text.split()
+        if len(w.strip("?।!,.")) > 1 and w.strip("?।!,.") not in _FILLERS
+    }
+
+
 def _is_repeat(turn: Turn, previous: list[Turn]) -> bool:
+    """People rarely repeat a question verbatim — they rephrase it ("आप कहाँ हैं?"
+    → "अरे भैया आप कहाँ हैं बताइए ना"). Match on shared content words as well as
+    raw string similarity, or real repeats slip through."""
     if not is_question(turn.text):
         return False
+    words = _content_words(turn.text)
     for old in previous:
-        if old is turn:
+        if old is turn or not is_question(old.text):
             continue
-        ratio = difflib.SequenceMatcher(None, old.text, turn.text).ratio()
-        if ratio >= 0.75:
+        if difflib.SequenceMatcher(None, old.text, turn.text).ratio() >= 0.75:
+            return True
+        shared = words & _content_words(old.text)
+        if len(shared) >= 3:
             return True
     return False
 
@@ -263,14 +284,22 @@ AFFIRMATIVE = ("हाँ", "हां", "जी", "ठीक", "ಹೌದು", 
 NEGATIVE = ("नहीं", "ना", "ಬೇಡ", "ಇಲ್ಲ", "no", "nahi", "beda")
 
 
+def _hits_word(text: str, lexicon) -> bool:
+    """Whole-word match. Substring matching is wrong here: "कहाँ" (where)
+    contains "हाँ" (yes), so "आप कहाँ हैं?" would read as accepting the offer.
+    """
+    tokens = {w.strip("?।!,.‍") for w in text.lower().split()}
+    return any(phrase.lower() in tokens for phrase in lexicon)
+
+
 def offer_reply(text: str) -> str | None:
     """Classify a reply to the agent's offer: 'yes' | 'no' | None.
 
     Negation is checked first: "नहीं, ठीक है" ("no, it's fine") is a decline
     even though it contains an affirmative word.
     """
-    if _hits(text, NEGATIVE):
+    if _hits_word(text, NEGATIVE):
         return "no"
-    if _hits(text, AFFIRMATIVE):
+    if _hits_word(text, AFFIRMATIVE):
         return "yes"
     return None

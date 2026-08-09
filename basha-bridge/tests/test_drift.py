@@ -179,3 +179,32 @@ def test_turn_manager_gives_up_after_patience():
     tm.record(MediationAction("ASK_DRIVER_ETA", "driver", "?", ""))
     assert not tm.should_act("rider")
     assert tm.should_act("rider")  # silent driver — move on rather than stall
+
+
+def test_rephrased_question_counts_as_a_repeat():
+    """Real speech rephrases; caught live where a verbatim matcher missed it."""
+    e = new_engine()
+    r = feed(
+        e,
+        ("rider", "hi-IN", 0.0, "भैया आप कहाँ हैं? मैं यहाँ खड़ा हूँ।"),
+        ("rider", "hi-IN", 5.0, "अरे भैया आप कहाँ हैं बताइए ना"),
+    )
+    assert "REPEATED_QUESTION" in r.signals
+
+
+def test_different_questions_are_not_repeats():
+    e = new_engine()
+    r = feed(
+        e,
+        ("rider", "hi-IN", 0.0, "आपका ओटीपी क्या है?"),
+        ("rider", "hi-IN", 5.0, "गाड़ी का रंग कौन सा है?"),
+    )
+    assert "REPEATED_QUESTION" not in r.signals
+
+
+def test_where_question_is_not_an_acceptance():
+    """"कहाँ" (where) contains "हाँ" (yes) — substring matching read a question
+    as accepting the agent's offer."""
+    assert offer_reply("आप कहाँ हैं?") is None
+    assert offer_reply("गेट के पास। आप कहाँ हैं?") is None
+    assert offer_reply("हाँ ठीक है") == "yes"
