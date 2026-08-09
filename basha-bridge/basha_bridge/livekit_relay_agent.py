@@ -53,8 +53,8 @@ ROLE_TRACK_NAMES = {
 }
 SUPPORTED_RELAY_LANGUAGES = {"hi-IN", "kn-IN"}
 LOCK_DETECTIONS_PER_ROLE = 2
-VAD_RMS_THRESHOLD = 550
-MIN_UTTERANCE_MS = 500
+VAD_RMS_THRESHOLD = 250
+MIN_UTTERANCE_MS = 400
 END_SILENCE_MS = 700
 MAX_UTTERANCE_MS = 6000
 GATE_EVENT_TOPIC = "relay_gate"
@@ -132,7 +132,16 @@ class RelayGate:
         stt_probability: float | None,
     ) -> GateSnapshot | None:
         """Record one utterance language and return a snapshot if gate resolved."""
-        if role not in self.states or language not in SUPPORTED_RELAY_LANGUAGES:
+        if role not in self.states:
+            return None
+        if language not in SUPPORTED_RELAY_LANGUAGES:
+            print(
+                f"language sample ignored role={role} language={language} "
+                f"stt={stt_language} lid={text_lid_language or '-'} "
+                f"p={stt_probability if stt_probability is not None else '-'} "
+                f"text={transcript!r}",
+                flush=True,
+            )
             return None
 
         async with self._lock:
@@ -466,6 +475,7 @@ async def utterance_pcm(track: rtc.Track, stop_event: asyncio.Event):
     speech = bytearray()
     voiced_ms = 0
     silence_ms = 0
+    peak_rms = 0.0
     try:
         async for event in stream:
             if stop_event.is_set():
@@ -481,6 +491,9 @@ async def utterance_pcm(track: rtc.Track, stop_event: asyncio.Event):
                     speech.clear()
                     voiced_ms = 0
                     silence_ms = 0
+                    peak_rms = 0.0
+                    print(f"utterance started rms={rms:.0f}", flush=True)
+                peak_rms = max(peak_rms, rms)
                 speech.extend(pcm)
                 voiced_ms += frame_ms
                 silence_ms = 0
@@ -493,11 +506,22 @@ async def utterance_pcm(track: rtc.Track, stop_event: asyncio.Event):
                 or voiced_ms + silence_ms >= MAX_UTTERANCE_MS
             ):
                 if voiced_ms >= MIN_UTTERANCE_MS:
+                    print(
+                        f"utterance captured voiced_ms={voiced_ms} silence_ms={silence_ms} "
+                        f"peak_rms={peak_rms:.0f} bytes={len(speech)}",
+                        flush=True,
+                    )
                     yield bytes(speech)
+                else:
+                    print(
+                        f"utterance dropped too short voiced_ms={voiced_ms} peak_rms={peak_rms:.0f}",
+                        flush=True,
+                    )
                 active = False
                 speech.clear()
                 voiced_ms = 0
                 silence_ms = 0
+                peak_rms = 0.0
     finally:
         await stream.aclose()
 
@@ -513,6 +537,7 @@ async def detect_track_languages(
         if gate.is_resolved():
             break
         wav_bytes = pcm_to_wav_bytes(pcm)
+        print(f"running language detection role={role} wav_bytes={len(wav_bytes)}", flush=True)
         audio_file = io.BytesIO(wav_bytes)
         audio_file.name = f"{role}-utterance.wav"
         try:
