@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 out*.wav
+web/node_modules/
+web/dist/

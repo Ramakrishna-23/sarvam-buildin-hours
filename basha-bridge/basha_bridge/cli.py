@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import sys
+import time
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -25,12 +26,14 @@ async def check_sarvam() -> bool:
         return False
     try:
         client = AsyncSarvamAI(api_subscription_key=config.SARVAM_API_KEY)
+        t0 = time.monotonic()
         resp = await client.text.translate(
             input="Hello",
             source_language_code="en-IN",
             target_language_code="hi-IN",
         )
-        ok(f"Sarvam API key valid (translate: {resp.translated_text!r})")
+        rtt_ms = (time.monotonic() - t0) * 1000
+        ok(f"Sarvam API key valid (translate: {resp.translated_text!r}, rtt {rtt_ms:.0f}ms)")
         return True
     except Exception as e:
         fail(f"Sarvam check failed: {e}")
@@ -58,8 +61,10 @@ async def check_livekit() -> bool:
             .to_jwt()
         )
         room = rtc.Room()
+        t0 = time.monotonic()
         await room.connect(config.LIVEKIT_URL, token)
-        ok(f"LiveKit join OK (room: {room.name})")
+        connect_ms = (time.monotonic() - t0) * 1000
+        ok(f"LiveKit join OK (room: {room.name}, connect {connect_ms:.0f}ms)")
         await room.disconnect()
         return True
     except Exception as e:

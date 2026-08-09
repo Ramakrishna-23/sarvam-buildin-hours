@@ -12,6 +12,8 @@ dependencies = [
 
 [project.scripts]
 basha-bridge = "basha_bridge.cli:main"
+basha-livekit-agent = "basha_bridge.livekit_relay_agent:main"
+basha-token-server = "basha_bridge.token_server:main"
 
 [build-system]
 requires = ["hatchling"]

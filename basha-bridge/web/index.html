@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Basha Bridge Phase 2</title>
+  </head>
+  <body>
+    <div id="app">
+      <h1>Basha Bridge — Phase 2</h1>
+      <p>One-direction live relay: <strong>driver Kannada → customer Hindi</strong></p>
+      <form id="join-form">
+        <label>
+          Room
+          <input id="room" value="basha-demo" />
+        </label>
+        <label>
+          Role
+          <select id="role">
+            <option value="driver">driver</option>
+            <option value="customer">customer</option>
+          </select>
+        </label>
+        <label>
+          Token endpoint
+          <input id="token-endpoint" value="http://127.0.0.1:8787/token" />
+        </label>
+        <button type="submit">Join</button>
+      </form>
+      <div id="status">not connected</div>
+      <div id="panels">
+        <section>
+          <h2>Local</h2>
+          <div id="local"></div>
+        </section>
+        <section>
+          <h2>Remote audio</h2>
+          <div id="remote"></div>
+        </section>
+        <section>
+          <h2>Events</h2>
+          <pre id="log"></pre>
+        </section>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
