@@ -99,7 +99,47 @@ customer hears agent-to-customer
 driver hears agent-to-driver
 ```
 
-## 8. Troubleshooting
+## 8. Deterministic local fixture test
+
+Use this when laptop mic/background noise makes manual testing unreliable.
+
+### Option A — test deployed Railway agent
+
+Railway agent currently joins `LIVEKIT_ROOM`, usually `basha-demo`. Open an observer browser:
+
+```text
+https://basha-bridge.pages.dev/?role=observer&room=basha-demo
+```
+
+Then from local `basha-bridge/`, publish prerecorded fixtures as fake `driver` and `customer` participants:
+
+```bash
+uv run basha-fixture-call --room basha-demo
+```
+
+The script plays two lock utterances per side, waits for the Phase 4 gate, then plays post-lock utterances for relay output. Observer attaches both `agent-to-customer` and `agent-to-driver` tracks.
+
+### Option B — fully local agent, cloud LiveKit
+
+Terminal 1:
+
+```bash
+uv run basha-livekit-agent --room basha-fixture-local
+```
+
+Terminal 2:
+
+```bash
+uv run basha-fixture-call --room basha-fixture-local
+```
+
+Browser observer:
+
+```text
+https://basha-bridge.pages.dev/?role=observer&room=basha-fixture-local
+```
+
+## 9. Troubleshooting
 
 - Speak two short, clear utterances on each side to lock language.
 - If the gate does not resolve, check Railway logs for `language sample role=...`.

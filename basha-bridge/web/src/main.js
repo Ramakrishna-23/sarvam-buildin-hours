@@ -57,9 +57,13 @@ function roleFromParticipant(participant) {
 
 function expectedAgentTracksForRole(currentRole) {
   // Phase 4 uses role-target tracks. Keep Phase 3 language-track names as a
-  // compatibility fallback while Railway rolls forward.
+  // compatibility fallback while Railway rolls forward. Observer attaches both
+  // directions for deterministic fixture testing.
   if (currentRole === 'customer') return [roleTracks.customer, 'agent-hi'];
   if (currentRole === 'driver') return [roleTracks.driver, 'agent-kn'];
+  if (currentRole === 'observer') {
+    return [roleTracks.customer, roleTracks.driver, 'agent-hi', 'agent-kn'];
+  }
   return [];
 }
 
@@ -92,6 +96,7 @@ function volumeForAudio(publication, participant) {
     return 1.0;
   }
   if (participantRole === 'driver' || participantRole === 'customer') {
+    if (role === 'observer') return 0.05;
     return relayMode === 'relay' ? 0.08 : 1.0;
   }
   return 1.0;
@@ -101,7 +106,7 @@ function updateAudioVolumes() {
   remoteEl.querySelectorAll('audio[data-participant-role]').forEach((el) => {
     const participantRole = el.dataset.participantRole;
     if (participantRole === 'driver' || participantRole === 'customer') {
-      el.volume = relayMode === 'relay' ? 0.08 : 1.0;
+      el.volume = role === 'observer' ? 0.05 : (relayMode === 'relay' ? 0.08 : 1.0);
     } else if (participantRole === 'agent') {
       el.volume = 1.0;
     }
@@ -209,19 +214,25 @@ async function join(event) {
   await room.connect(tokenData.url, tokenData.token);
   log(`connected as ${identity}; waiting for language lock`);
 
-  // Phase 4 starts as normal human audio. The agent silently detects language,
-  // then either opens relay and ducks originals or stays silent for same-language.
-  const mic = await createLocalAudioTrack({
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  });
-  await room.localParticipant.publishTrack(mic, { name: 'mic' });
-  const localAudio = mic.attach();
-  localAudio.muted = true;
-  localAudio.controls = true;
-  localEl.appendChild(localAudio);
-  log('published microphone; speak two short utterances to lock language');
+  // Observer is listen-only for deterministic fixture testing.
+  if (role === 'observer') {
+    localEl.textContent = 'observer is listen-only';
+    log('observer mode: no microphone published');
+  } else {
+    // Phase 4 starts as normal human audio. The agent silently detects language,
+    // then either opens relay and ducks originals or stays silent for same-language.
+    const mic = await createLocalAudioTrack({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: false,
+    });
+    await room.localParticipant.publishTrack(mic, { name: 'mic' });
+    const localAudio = mic.attach();
+    localAudio.muted = true;
+    localAudio.controls = true;
+    localEl.appendChild(localAudio);
+    log('published microphone; speak two short utterances to lock language');
+  }
 
   // Attach any already-subscribed remote tracks.
   room.remoteParticipants.forEach((participant) => {
