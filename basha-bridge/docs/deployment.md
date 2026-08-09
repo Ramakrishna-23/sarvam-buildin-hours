@@ -1,11 +1,11 @@
 # Deployment Runbook
 
-Goal: let teammates test the Phase 3 full-duplex baseline from their own devices.
+Goal: let teammates test the Phase 4 cold-start relay gate from their own devices.
 
-Phase 3 needs three running pieces:
+Phase 4 needs three running pieces:
 
 1. **Token server** — public HTTPS endpoint that issues LiveKit tokens.
-2. **Relay agent worker** — joins the LiveKit room and publishes Hindi + Kannada relay audio tracks.
+2. **Relay agent worker** — joins the LiveKit room, detects languages, and publishes role-target relay tracks only when needed.
 3. **Web frontend** — static site teammates open on phones/laptops.
 
 LiveKit itself is already cloud-hosted via `LIVEKIT_URL`.
@@ -88,8 +88,16 @@ Expected logs:
 
 ```text
 agent joined room 'basha-demo'
-published agent track: agent-hi
-published agent track: agent-kn
+published agent track: agent-to-customer
+published agent track: agent-to-driver
+```
+
+After both sides speak twice, expected mismatch logs:
+
+```text
+relay gate resolved: mismatch {'driver': 'kn-IN', 'customer': 'hi-IN'}; starting [...]
+starting relay driver kn-IN->customer hi-IN -> agent-to-customer
+starting relay customer hi-IN->driver kn-IN -> agent-to-driver
 ```
 
 The agent needs outbound network access only. It does not expose an HTTP port.
@@ -132,17 +140,18 @@ https://<frontend-domain>/?role=driver&room=basha-demo
 https://<frontend-domain>/?role=customer&room=basha-demo
 ```
 
-Phase 3 directions are hardcoded:
+Phase 4 behavior:
 
 ```text
-driver Kannada → customer Hindi via agent-hi
-customer Hindi → driver Kannada via agent-kn
+same language detected  → agent stays silent
+language mismatch found → relay starts in both directions
 ```
 
-Each listener should hear:
+Each browser starts with original human audio at full volume. After mismatch relay opens:
 
-- original human audio ducked to a low level
-- their target-language relay track at full volume
+- original human audio ducks to a low level
+- customer hears `agent-to-customer` at full volume
+- driver hears `agent-to-driver` at full volume
 
 Use headphones for full-duplex testing to avoid acoustic speaker → mic feedback.
 
@@ -175,7 +184,9 @@ https://<frontend-tunnel>/?role=customer&room=basha-demo&tokenEndpoint=https://<
 - If token health fails, check LiveKit env vars on the token server.
 - If frontend connects but agent does nothing, confirm relay worker is running for the same `LIVEKIT_ROOM`.
 - If agent logs no source track, confirm browser identities are exactly `driver` and `customer`.
-- If customer hears only original audio, confirm the agent published `agent-hi` and customer tab attached it.
-- If driver hears only original audio, confirm the agent published `agent-kn` and driver tab attached it.
+- If relay never starts, confirm each side spoke two clear utterances and Railway logs show `language locked` for both roles.
+- If same-language calls are silent from the agent, that is expected; browser human audio should stay full volume.
+- If customer hears only original audio after mismatch, confirm the agent published `agent-to-customer` and customer tab attached it.
+- If driver hears only original audio after mismatch, confirm the agent published `agent-to-driver` and driver tab attached it.
 - If audio loops or becomes chaotic, use headphones first; the agent structurally ignores its own LiveKit tracks, but browser speaker audio can still leak acoustically into a human mic.
 - Browser mic requires HTTPS except on localhost.
