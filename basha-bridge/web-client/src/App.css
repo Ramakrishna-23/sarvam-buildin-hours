@@ -1,0 +1,210 @@
+.join-screen {
+  max-width: 420px;
+  margin: 80px auto;
+  padding: 0 20px;
+  text-align: left;
+}
+
+.join-screen .subtitle {
+  margin-bottom: 32px;
+}
+
+.join-screen form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.join-screen label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.join-screen input,
+.join-screen textarea {
+  font: inherit;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  resize: vertical;
+}
+
+.advanced-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.role-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.role-toggle button {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.role-toggle button.active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.join-button {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.join-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  color: #e11d48;
+  font-size: 14px;
+}
+
+.hint {
+  margin-top: 24px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.call-view {
+  max-width: 480px;
+  margin: 40px auto;
+  padding: 0 20px;
+  text-align: left;
+}
+
+.call-view header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  gap: 12px;
+}
+
+.status {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.status-connected {
+  color: #16a34a;
+}
+
+.self-badge {
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.participant-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.participant-list li {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+}
+
+.participant-list li:last-child {
+  border-bottom: none;
+}
+
+.participant-list li.waiting {
+  color: var(--text);
+  font-size: 14px;
+  font-style: italic;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.dot[data-speaking='true'] {
+  background: #16a34a;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+}
+
+.controls button {
+  flex: 1;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  font: inherit;
+  cursor: pointer;
+}
+
+.controls button.muted {
+  border-color: #e11d48;
+  color: #e11d48;
+}
+
+.leave-button {
+  background: #e11d48 !important;
+  border-color: #e11d48 !important;
+  color: white !important;
+}
+
+.start-audio-button {
+  display: block;
+  width: calc(100% - 40px);
+  max-width: 480px;
+  margin: 12px auto 0;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
