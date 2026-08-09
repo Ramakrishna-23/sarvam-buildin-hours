@@ -1,12 +1,14 @@
-"""Phase 2: one-direction live relay over LiveKit.
+"""Phase 3: full-duplex live relay over LiveKit.
 
-Agent joins a LiveKit room, subscribes to one human audio track, runs the
-Phase-1 relay loop (STT partials -> segmenter -> translate -> TTS), and
-publishes a single agent audio track back into the room.
+Agent joins one LiveKit room, subscribes only to human microphone tracks, and
+runs two simultaneous Sarvam relay pipelines:
 
-Default direction is driver Kannada -> customer Hindi:
+    driver   kn-IN -> customer hi-IN  on agent-hi
+    customer hi-IN -> driver   kn-IN  on agent-kn
 
-    uv run python -m basha_bridge.livekit_relay_agent --room basha-demo
+There is intentionally no turn gate or drift/mediation layer here. Phase 3 is
+baseline full-duplex simultaneous relay: if both humans talk at once, both
+pipelines keep running independently.
 """
 
 from __future__ import annotations
@@ -28,22 +30,55 @@ from .translate import translate_segment
 from .tts import synthesize_segment_stream
 
 AGENT_IDENTITY = "relay-agent"
-AGENT_TRACK_NAME = "agent-hi"
+AGENT_HI_TRACK_NAME = "agent-hi"
+AGENT_KN_TRACK_NAME = "agent-kn"
 STT_SAMPLE_RATE = 16000
 TTS_SAMPLE_RATE = 16000
 LIVEKIT_SAMPLE_RATE = 48000
 NUM_CHANNELS = 1
 FRAME_MS = 20
+HUMAN_ROLES = {"driver", "customer"}
 
 
-@dataclass
+@dataclass(frozen=True)
+class DirectionConfig:
+    source_identity: str
+    source_role: str
+    source_language: str
+    target_role: str
+    target_language: str
+    agent_track_name: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.source_role} {self.source_language}->{self.target_role} {self.target_language}"
+
+
+DEFAULT_DIRECTIONS: tuple[DirectionConfig, ...] = (
+    DirectionConfig(
+        source_identity="driver",
+        source_role="driver",
+        source_language="kn-IN",
+        target_role="customer",
+        target_language="hi-IN",
+        agent_track_name=AGENT_HI_TRACK_NAME,
+    ),
+    DirectionConfig(
+        source_identity="customer",
+        source_role="customer",
+        source_language="hi-IN",
+        target_role="driver",
+        target_language="kn-IN",
+        agent_track_name=AGENT_KN_TRACK_NAME,
+    ),
+)
+
+
+@dataclass(frozen=True)
 class RelayConfig:
     room_name: str
-    source_identity: str = "driver"
-    source_language: str = "kn-IN"
-    target_language: str = "hi-IN"
     agent_identity: str = AGENT_IDENTITY
-    agent_track_name: str = AGENT_TRACK_NAME
+    directions: tuple[DirectionConfig, ...] = DEFAULT_DIRECTIONS
 
 
 def make_token(identity: str, room_name: str) -> str:
@@ -73,8 +108,8 @@ def make_token(identity: str, room_name: str) -> str:
 async def frame_bytes(track: rtc.Track, sample_rate: int = STT_SAMPLE_RATE):
     """Yield mono pcm_s16le bytes from a LiveKit audio track.
 
-    AudioStream can request 16 kHz mono output, so this is the plan's
-    48 kHz WebRTC -> 16 kHz STT resampling step.
+    AudioStream requests 16 kHz mono output, which is the WebRTC -> STT
+    resampling step required by the relay pipeline.
     """
     stream = rtc.AudioStream.from_track(
         track=track,
@@ -99,17 +134,17 @@ async def publish_agent_track(room: rtc.Room, track_name: str) -> rtc.AudioSourc
     options = rtc.TrackPublishOptions()
     options.source = rtc.TrackSource.SOURCE_MICROPHONE
     publication = await room.local_participant.publish_track(track, options)
-    print(f"published agent track: {track_name} ({publication.sid})")
+    print(f"published agent track: {track_name} ({publication.sid})", flush=True)
     return source
 
 
 class LiveKitPcmPublisher:
     """Publish finite TTS PCM as properly framed LiveKit audio.
 
-    Sarvam TTS gives us linear16 chunks at TTS_SAMPLE_RATE. LiveKit backend
-    publishing docs use 48 kHz audio and small frames, so we resample once and
-    capture 20 ms frames. This avoids choppy/loop-like playback artifacts from
-    pushing arbitrary TTS chunk sizes directly into the WebRTC source.
+    Sarvam TTS gives linear16 chunks at TTS_SAMPLE_RATE. LiveKit playback is
+    published as 48 kHz mono PCM in small frames. Each relay direction gets its
+    own instance, so its output queue cannot block or mingle with the other
+    direction.
     """
 
     def __init__(self, source: rtc.AudioSource):
@@ -158,12 +193,17 @@ class LiveKitPcmPublisher:
         await self.source.capture_frame(frame)
 
 
-async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: RelayConfig) -> None:
+async def relay_track(
+    track: rtc.Track,
+    audio_source: rtc.AudioSource,
+    direction: DirectionConfig,
+) -> None:
     client = AsyncSarvamAI(api_subscription_key=config.SARVAM_API_KEY)
     segmenter = Segmenter()
     publisher = LiveKitPcmPublisher(audio_source)
     segment_queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
     started = time.monotonic()
+    cancelled = False
 
     async def consume_segments() -> None:
         while True:
@@ -173,22 +213,23 @@ async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: Rela
                 translated = await translate_segment(
                     client,
                     seg,
-                    cfg.source_language,
-                    cfg.target_language,
+                    direction.source_language,
+                    direction.target_language,
                 )
                 print(
-                    f"[{t_commit:6.2f}s] seg {idx}: {seg!r} -> {translated!r}",
+                    f"[{direction.label}] [{t_commit:6.2f}s] seg {idx}: {seg!r} -> {translated!r}",
                     flush=True,
                 )
                 first = True
                 async for chunk in synthesize_segment_stream(
                     client,
                     translated,
-                    cfg.target_language,
+                    direction.target_language,
                     sample_rate=TTS_SAMPLE_RATE,
                 ):
                     if first:
                         print(
+                            f"[{direction.label}] "
                             f"[{time.monotonic() - started:6.2f}s] seg {idx}: first audio",
                             flush=True,
                         )
@@ -196,16 +237,19 @@ async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: Rela
                     await publisher.push(bytes(chunk))
                 await publisher.flush()
             except Exception as exc:
-                print(f"segment {idx} failed: {exc!r}", flush=True)
+                print(f"[{direction.label}] segment {idx} failed: {exc!r}", flush=True)
             finally:
                 segment_queue.task_done()
 
-    consumer = asyncio.create_task(consume_segments())
+    consumer = asyncio.create_task(
+        consume_segments(),
+        name=f"segments-{direction.source_role}-to-{direction.target_role}",
+    )
     idx = 0
     try:
         async for event, text in stream_partials(
             frame_bytes(track, STT_SAMPLE_RATE),
-            language_code=cfg.source_language,
+            language_code=direction.source_language,
             sample_rate=STT_SAMPLE_RATE,
             stream_type="fast",
         ):
@@ -215,25 +259,72 @@ async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: Rela
             elif event == "final":
                 segments = segmenter.flush(text)
             elif event in ("speech_start", "speech_end"):
-                print(f"[{time.monotonic() - started:6.2f}s] {event}", flush=True)
+                print(
+                    f"[{direction.label}] [{time.monotonic() - started:6.2f}s] {event}",
+                    flush=True,
+                )
 
             for seg in segments:
                 if not seg.strip():
                     continue
                 await segment_queue.put((idx, seg))
                 idx += 1
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
-        await segment_queue.join()
+        if not cancelled:
+            await segment_queue.join()
         consumer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await consumer
 
 
-def is_source_audio(track: rtc.Track, participant: rtc.RemoteParticipant, cfg: RelayConfig) -> bool:
-    return (
-        participant.identity == cfg.source_identity
-        and track.kind == rtc.TrackKind.KIND_AUDIO
-    )
+def participant_role(participant: rtc.RemoteParticipant) -> str | None:
+    try:
+        metadata = json.loads(participant.metadata or "{}")
+        role = metadata.get("role")
+        if isinstance(role, str):
+            return role
+    except json.JSONDecodeError:
+        pass
+    if participant.identity == AGENT_IDENTITY:
+        return "agent"
+    if participant.identity in HUMAN_ROLES:
+        return participant.identity
+    return None
+
+
+def direction_for_audio(
+    track: rtc.Track,
+    participant: rtc.RemoteParticipant,
+    cfg: RelayConfig,
+) -> DirectionConfig | None:
+    """Return the relay direction for a human audio track, otherwise None.
+
+    This is the Phase 3 self-echo guard: the agent structurally ignores every
+    non-human participant and especially its own `relay-agent` publications.
+    """
+    if track.kind != rtc.TrackKind.KIND_AUDIO:
+        return None
+    if participant.identity == cfg.agent_identity:
+        return None
+
+    role = participant_role(participant)
+    if role not in HUMAN_ROLES:
+        return None
+
+    for direction in cfg.directions:
+        if participant.identity == direction.source_identity or role == direction.source_role:
+            return direction
+    return None
+
+
+def consume_task_result(task: asyncio.Task, task_key: str) -> None:
+    with contextlib.suppress(asyncio.CancelledError):
+        exc = task.exception()
+        if exc:
+            print(f"relay task {task_key} failed: {exc!r}", flush=True)
 
 
 async def run_agent(cfg: RelayConfig) -> None:
@@ -243,23 +334,51 @@ async def run_agent(cfg: RelayConfig) -> None:
         raise RuntimeError("SARVAM_API_KEY is required")
 
     room = rtc.Room()
-    relay_task: asyncio.Task | None = None
-    audio_source: rtc.AudioSource | None = None
+    relay_tasks: dict[str, asyncio.Task[None]] = {}
+    audio_sources: dict[str, rtc.AudioSource] = {}
     pending_source_tracks: list[tuple[rtc.Track, rtc.RemoteParticipant]] = []
 
     def start_relay(track: rtc.Track, participant: rtc.RemoteParticipant) -> None:
-        nonlocal relay_task, audio_source
-        if not is_source_audio(track, participant, cfg):
+        direction = direction_for_audio(track, participant, cfg)
+        if direction is None:
             return
-        if relay_task and not relay_task.done():
-            print("relay already running; ignoring duplicate source track")
+
+        task_key = direction.source_role
+        existing = relay_tasks.get(task_key)
+        if existing and not existing.done():
+            print(f"relay already running for {direction.label}; ignoring duplicate source track", flush=True)
             return
+
+        audio_source = audio_sources.get(direction.agent_track_name)
         if audio_source is None:
-            print(f"source track from {participant.identity} arrived before agent output was ready; deferring")
+            print(
+                f"source track from {participant.identity} for {direction.label} arrived "
+                "before agent output was ready; deferring",
+                flush=True,
+            )
             pending_source_tracks.append((track, participant))
             return
-        print(f"subscribed to source track from {participant.identity}; starting relay")
-        relay_task = asyncio.create_task(relay_track(track, audio_source, cfg))
+
+        print(
+            f"subscribed to source track from {participant.identity}; "
+            f"starting relay {direction.label} -> {direction.agent_track_name}",
+            flush=True,
+        )
+        task = asyncio.create_task(
+            relay_track(track, audio_source, direction),
+            name=f"relay-{direction.source_role}-to-{direction.target_role}",
+        )
+        relay_tasks[task_key] = task
+        task.add_done_callback(lambda done, key=task_key: consume_task_result(done, key))
+
+    def cancel_relay_for(participant: rtc.RemoteParticipant) -> None:
+        role = participant_role(participant)
+        for direction in cfg.directions:
+            if participant.identity == direction.source_identity or role == direction.source_role:
+                task = relay_tasks.get(direction.source_role)
+                if task and not task.done():
+                    print(f"cancelling relay for disconnected {direction.source_role}", flush=True)
+                    task.cancel()
 
     @room.on("track_subscribed")
     def on_track_subscribed(
@@ -269,6 +388,7 @@ async def run_agent(cfg: RelayConfig) -> None:
     ) -> None:
         print(
             f"track_subscribed participant={participant.identity} "
+            f"role={participant_role(participant)} "
             f"track={publication.name} kind={track.kind}",
             flush=True,
         )
@@ -276,19 +396,28 @@ async def run_agent(cfg: RelayConfig) -> None:
 
     @room.on("participant_connected")
     def on_participant_connected(participant: rtc.RemoteParticipant) -> None:
-        print(f"participant connected: {participant.identity}", flush=True)
+        print(
+            f"participant connected: {participant.identity} role={participant_role(participant)}",
+            flush=True,
+        )
 
     @room.on("participant_disconnected")
     def on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
         print(f"participant disconnected: {participant.identity}", flush=True)
+        cancel_relay_for(participant)
 
     token = make_token(cfg.agent_identity, cfg.room_name)
     await room.connect(config.LIVEKIT_URL, token)
-    print(f"agent joined room {room.name!r} as {cfg.agent_identity!r}")
-    audio_source = await publish_agent_track(room, cfg.agent_track_name)
+    print(f"agent joined room {room.name!r} as {cfg.agent_identity!r}", flush=True)
+
+    for direction in cfg.directions:
+        audio_sources[direction.agent_track_name] = await publish_agent_track(
+            room,
+            direction.agent_track_name,
+        )
 
     # Handle tracks that were subscribed during connect before the agent output
-    # track was ready, then scan any already-present participants.
+    # tracks were ready, then scan any already-present participants.
     for track, participant in pending_source_tracks:
         start_relay(track, participant)
     pending_source_tracks.clear()
@@ -301,29 +430,21 @@ async def run_agent(cfg: RelayConfig) -> None:
         while room.isconnected():
             await asyncio.sleep(1)
     finally:
-        if relay_task:
-            relay_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await relay_task
+        for task in relay_tasks.values():
+            task.cancel()
+        if relay_tasks:
+            await asyncio.gather(*relay_tasks.values(), return_exceptions=True)
         await room.disconnect()
 
 
 def parse_args() -> RelayConfig:
     parser = argparse.ArgumentParser(prog="basha-livekit-agent")
     parser.add_argument("--room", required=True, help="LiveKit room name")
-    parser.add_argument("--source-identity", default="driver")
-    parser.add_argument("--source-language", default="kn-IN")
-    parser.add_argument("--target-language", default="hi-IN")
     parser.add_argument("--agent-identity", default=AGENT_IDENTITY)
-    parser.add_argument("--agent-track-name", default=AGENT_TRACK_NAME)
     args = parser.parse_args()
     return RelayConfig(
         room_name=args.room,
-        source_identity=args.source_identity,
-        source_language=args.source_language,
-        target_language=args.target_language,
         agent_identity=args.agent_identity,
-        agent_track_name=args.agent_track_name,
     )
 
 

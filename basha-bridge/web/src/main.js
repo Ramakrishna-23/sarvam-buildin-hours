@@ -49,28 +49,36 @@ function roleFromParticipant(participant) {
   return 'unknown';
 }
 
+function expectedAgentTrackForRole(currentRole) {
+  if (currentRole === 'customer') return 'agent-hi';
+  if (currentRole === 'driver') return 'agent-kn';
+  return '';
+}
+
 function shouldAttachAudio(track, publication, participant) {
   const participantRole = roleFromParticipant(participant);
   const trackName = publication.trackName || publication.name || track.name || '';
 
-  // Phase 2 direction is driver kn -> customer hi.
+  // Phase 3 publishes two agent tracks. Each side only attaches the translated
+  // target-language track intended for that role.
   if (participantRole === 'agent') {
-    return role === 'customer' && trackName.includes('agent-hi');
+    const expectedTrack = expectedAgentTrackForRole(role);
+    return Boolean(expectedTrack && trackName.includes(expectedTrack));
   }
 
   // Do not attach own remote echoes.
   if (participant.identity === identity) return false;
 
-  // Humans hear each other. Customer ducks original driver audio to keep the
-  // Hindi relay intelligible while still preserving live-call context.
+  // Humans hear each other with low gain underneath the translated relay.
   return true;
 }
 
 function volumeForAudio(publication, participant) {
   const participantRole = roleFromParticipant(participant);
   const trackName = publication.trackName || publication.name || '';
-  if (participantRole === 'agent' && trackName.includes('agent-hi')) return 1.0;
-  if (role === 'customer' && participant.identity === 'driver') return 0.08;
+  const expectedTrack = expectedAgentTrackForRole(role);
+  if (participantRole === 'agent' && expectedTrack && trackName.includes(expectedTrack)) return 1.0;
+  if (participantRole === 'driver' || participantRole === 'customer') return 0.08;
   return 1.0;
 }
 
@@ -146,25 +154,20 @@ async function join(event) {
   await room.connect(tokenData.url, tokenData.token);
   log(`connected as ${identity}`);
 
-  // Phase 2 is one-direction: driver Kannada -> customer Hindi.
-  // Keep customer listen-only to avoid feedback loops where relay audio is
-  // picked up by the customer mic, sent back to the driver, then re-relayed.
-  if (role === 'driver') {
-    const mic = await createLocalAudioTrack({
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    });
-    await room.localParticipant.publishTrack(mic, { name: 'mic' });
-    const localAudio = mic.attach();
-    localAudio.muted = true;
-    localAudio.controls = true;
-    localEl.appendChild(localAudio);
-    log('published microphone');
-  } else {
-    localEl.textContent = 'listen-only in Phase 2';
-    log('customer is listen-only in Phase 2');
-  }
+  // Phase 3 is full-duplex: both humans publish mic audio and the agent runs
+  // independent relay pipelines in both directions. Headphones are strongly
+  // recommended during testing to avoid acoustic feedback into the microphone.
+  const mic = await createLocalAudioTrack({
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  });
+  await room.localParticipant.publishTrack(mic, { name: 'mic' });
+  const localAudio = mic.attach();
+  localAudio.muted = true;
+  localAudio.controls = true;
+  localEl.appendChild(localAudio);
+  log('published microphone; use headphones for Phase 3 full-duplex testing');
 
   // Attach any already-subscribed remote tracks.
   room.remoteParticipants.forEach((participant) => {

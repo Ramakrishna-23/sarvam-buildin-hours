@@ -1,11 +1,11 @@
 # Deployment Runbook
 
-Goal: let teammates test Phase 2 from their own devices.
+Goal: let teammates test the Phase 3 full-duplex baseline from their own devices.
 
-Phase 2 needs three running pieces:
+Phase 3 needs three running pieces:
 
 1. **Token server** — public HTTPS endpoint that issues LiveKit tokens.
-2. **Relay agent worker** — joins the LiveKit room and publishes Hindi relay audio.
+2. **Relay agent worker** — joins the LiveKit room and publishes Hindi + Kannada relay audio tracks.
 3. **Web frontend** — static site teammates open on phones/laptops.
 
 LiveKit itself is already cloud-hosted via `LIVEKIT_URL`.
@@ -89,6 +89,7 @@ Expected logs:
 ```text
 agent joined room 'basha-demo'
 published agent track: agent-hi
+published agent track: agent-kn
 ```
 
 The agent needs outbound network access only. It does not expose an HTTP port.
@@ -131,16 +132,19 @@ https://<frontend-domain>/?role=driver&room=basha-demo
 https://<frontend-domain>/?role=customer&room=basha-demo
 ```
 
-Phase 2 direction is hardcoded:
+Phase 3 directions are hardcoded:
 
 ```text
-driver Kannada → customer Hindi
+driver Kannada → customer Hindi via agent-hi
+customer Hindi → driver Kannada via agent-kn
 ```
 
-The customer should hear:
+Each listener should hear:
 
-- original driver audio ducked to ~20%
-- Hindi relay audio from `agent-hi` at full volume
+- original human audio ducked to a low level
+- their target-language relay track at full volume
+
+Use headphones for full-duplex testing to avoid acoustic speaker → mic feedback.
 
 ---
 
@@ -170,6 +174,8 @@ https://<frontend-tunnel>/?role=customer&room=basha-demo&tokenEndpoint=https://<
 
 - If token health fails, check LiveKit env vars on the token server.
 - If frontend connects but agent does nothing, confirm relay worker is running for the same `LIVEKIT_ROOM`.
-- If agent logs no source track, confirm driver identity is exactly `driver`.
+- If agent logs no source track, confirm browser identities are exactly `driver` and `customer`.
 - If customer hears only original audio, confirm the agent published `agent-hi` and customer tab attached it.
+- If driver hears only original audio, confirm the agent published `agent-kn` and driver tab attached it.
+- If audio loops or becomes chaotic, use headphones first; the agent structurally ignores its own LiveKit tracks, but browser speaker audio can still leak acoustically into a human mic.
 - Browser mic requires HTTPS except on localhost.
