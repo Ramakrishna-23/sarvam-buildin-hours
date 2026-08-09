@@ -1,163 +1,146 @@
 # Basha Bridge — Phased Implementation Plan
 
-Source: `docs/architecture.html` (HLD) · `docs/initial-decisions.md`
+Source: `docs/architecture.html` (HLD) · `docs/initial-decisions.md` · mentor feedback (2026-08-09)
+
+**Product shape after mentor review:** always-on **simultaneous relay** (live dubbing, ~2 s rolling lag) is the baseline. Drift-gated activation and task mediation are layered on top after the baseline ships.
+
+**Baseline rule:** language mismatch detected → relay starts. Same language → agent stays silent.
 
 Rule: **every phase ends with a runnable, testable artifact.** If time runs out mid-phase, the previous phase is still demoable.
 
 ---
 
-## Phase 0 — Scaffold & connectivity (~1 h)
+# BASELINE — hosted live interpreter
 
-**Goal:** environment proven before writing pipeline code.
+## Phase 0 — Scaffold & connectivity ✅ done
 
-Tasks:
-- `uv` project scaffold: `basha_bridge/` package, `.env` (`SARVAM_API_KEY`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`)
-- Record/collect fixture WAVs: 2× Hindi, 2× Kannada — at least one containing an OTP and a place name
-- `--check` command: hits Sarvam REST STT with a fixture, mints a LiveKit token and joins/leaves a room
-
-**Artifact:** `uv run basha-bridge --check`
-**Test:** both checks print green; fixture WAVs committed under `fixtures/`.
+`uv` project, `--check` CLI (Sarvam + LiveKit green), 4 fixture WAVs (hi/kn, OTP + place name, 16 kHz mono PCM), STT round-trip validated with `language_code="unknown"`.
 
 ---
 
-## Phase 1 — Sarvam client layer, offline (~2–3 h)
+## Phase 1 — Sarvam client layer + partials spike (~2–3 h)
 
-**Goal:** every Sarvam API wrapped and proven against fixtures, no WebRTC involved.
+**Goal:** every Sarvam API wrapped and proven against fixtures; the simultaneous-relay question answered with data.
 
-Use the official `sarvamai` Python SDK (`AsyncSarvamAI`) as the default client; drop to raw `websockets` only where the SDK falls short.
+Use the official `sarvamai` SDK (`AsyncSarvamAI`); raw `websockets` only where the SDK falls short.
 
 Tasks:
-- `stt_stream.py` — SDK `speech_to_text_streaming.connect()`, saaras:v3, `mode=transcribe`, `vad_signals=true`, 16 kHz pcm_s16le; check if `language_code="unknown"` works well enough on streaming to simplify Phase 4
-- `stt_rest.py` — SDK batch STT with `language_code=unknown` → detected language + confidence; `/text-lid` re-check
-- `translate.py` — SDK translate, mayura:v1, `modern-colloquial`, `output_script=fully-native`; Indic-aware sentence splitter (1000-char limit); glossary/OTP placeholder swap + restore
-- `transliterate.py` — SDK transliterate for names/place names
-- `tts_stream.py` — bulbul:v3 streaming; SDK has `text_to_speech_streaming` + `convert_stream` (confirmed in Phase 0) — verify client-side cancel for barge-in; raw WS fallback only if socket control is insufficient. Note: bulbul:v3 has its own speaker set (v2 voices rejected); confirmed working: amit, priya, rohan, ritu
-- `chat.py` — sarvam-105b-conversations with strict JSON schema (SDK chat, or OpenAI SDK against `api.sarvam.ai/v1` if JSON-schema mode is easier there)
+- **Partials spike (do first — informs everything):** feed a fixture in real-time-sized chunks to `speech_to_text_realtime_streaming` and `speech_to_text_streaming`; measure partial-transcript cadence and stability. Decide: true partials vs rolling 1.5–2 s re-transcribed windows (cookbook Live_Video_Transcription pattern) as fallback
+- `stt_stream.py` — chosen streaming client, saaras:v3, `mode=transcribe`, `vad_signals=true`, 16 kHz pcm_s16le
+- `segmenter.py` — stable-prefix / clause-boundary commit policy (commit when text unchanged across K partials or at `।` `,` `.` `?` `!`); target commit horizon 0.6–1 s
+- `stt_rest.py` — batch STT `language_code=unknown` → language + confidence (proven in Phase 0); `/text-lid` re-check
+- `translate.py` — mayura:v1, `modern-colloquial`, `fully-native`; OTP regex lock (digits never translated); glossary placeholder swap + restore
+- `transliterate.py` — names/place names cross scripts without translation
+- `tts.py` — bulbul:v3 per-segment synthesis into a playback queue; SDK `text_to_speech_streaming`/`convert_stream` confirmed to exist — verify cancel behavior; v3 speaker set only (confirmed working: amit, priya, rohan, ritu)
 
-**Artifact:** `uv run python -m basha_bridge.offline_pipeline fixtures/kn_otp.wav`
-→ prints transcript → native-script Hindi translation → writes `out.wav` → prints per-stage latency.
+**Artifact:** `uv run python -m basha_bridge.offline_pipeline fixtures/kn_pickup.wav`
+→ streams the WAV as if live → prints committed segments as they emerge → translated segments → writes `out.wav` → per-stage latency table incl. **rolling lag** (audio-time → translated-audio-time per segment).
 **Test:**
-- kn fixture → intelligible Hindi audio
-- OTP digits survive translation verbatim
-- place name transliterated, not translated
-- latency table gives baseline for the <2 s budget
+- committed segments emerge *while* audio is still streaming (not after)
+- OTP digits survive verbatim; place name transliterated not translated
+- measured rolling lag < 2.5 s per segment on fixtures
 
 ---
 
-## Phase 2 — One half-pipeline live over LiveKit (~2–3 h)
+## Phase 2 — One-direction live relay over LiveKit (~2–3 h)
 
-**Goal:** first live audio: speak Kannada on one device, hear Hindi on another.
+**Goal:** speak Kannada on one device, hear Hindi on the other *while still speaking*.
 
 Tasks:
-- Agent process using LiveKit Agents (Python): join room, subscribe to "driver" participant, publish agent audio track
-- Wire Phase 1 clients into a live pipeline: STT WS → translate (sentence-streamed) → TTS WS → publish
-- Hardcode kn→hi; no turn manager yet
+- Agent process (LiveKit Agents, Python): join room, subscribe to one participant, publish one agent audio track
+- Wire Phase 1 loop live: track PCM → resample 48→16 kHz → streaming STT → segmenter → translate → TTS → playback queue → AudioSource
+- Hardcode kn→hi; original audio ducked to ~20% on the listener side (client-side gain)
 - Minimal frontend: join page with `?role=customer|driver` links (Vite + LiveKit JS SDK)
 
-**Artifact:** two browsers/devices in one room; Kannada in → Hindi out.
-**Test:** first translated audio < 2.5 s after end of speech; long utterance streams sentence-by-sentence.
+**Artifact:** two devices in one room; continuous Kannada in → rolling Hindi out.
+**Test:** first translated audio starts before the speaker finishes a long sentence; rolling lag ≤ 2.5 s; lag does not grow with utterance length.
 
 ---
 
-## Phase 3 — Mirror pipeline, turn manager, barge-in (~2 h)
+## Phase 3 — Full-duplex: both directions + collision handling (~2 h)
 
-**Goal:** natural back-and-forth in both directions.
+**Goal:** natural two-way conversation, both relays live simultaneously.
 
 Tasks:
-- Mirror pipeline B (hi→kn), distinct fixed voice per direction
-- Half-duplex FSM: `IDLE → CAPTURING(party) → PROCESSING → SPEAKING → IDLE`; ~0.5 s END_SPEECH debounce
-- Barge-in: `START_SPEECH` from the listening party → stop publishing, drop queued TTS chunks, rotate to spare TTS socket, capture interrupter
+- Mirror pipeline hi→kn; fixed distinct voice per direction
+- Two independent playback queues (agent-to-rider, agent-to-driver tracks; selective subscription by role)
+- Collision policy: both humans talking at once → both relays keep running (full-duplex, no turn gating); listener-side ducking keeps it intelligible
+- Self-echo guard: agent's own TTS output must not feed back into the other direction's STT (subscribe only to human tracks — structural, verify)
 
-**Artifact:** live two-way translated conversation.
-**Test:**
-- alternating turns work without pipelines talking over each other
-- interrupting the agent mid-playback cuts audio and captures the interrupter's speech losslessly
+**Artifact:** live two-way translated conversation between two devices.
+**Test:** back-and-forth with overlaps stays intelligible; no feedback loops; per-direction lag ≤ 2.5 s.
 
 ---
 
-## Phase 4 — Language detection & pair lock (~1 h)
+## Phase 4 — Language detect, pair lock, relay gate (~1 h)
 
-**Goal:** cold start with no assumed languages.
+**Goal:** cold start with no assumed languages; relay only when needed.
 
 Tasks:
-- Buffer first utterance per side (between VAD START/END) → REST STT `language_code=unknown` → `/text-lid` confirm
-- Lock pair after 2 consistent utterances per side; restart streaming STT with fixed codes
-- Same language both sides → agent stays passive permanently
+- Buffer first utterance per side → REST STT `language_code=unknown` → `/text-lid` confirm; lock pair after 2 consistent utterances per side
+- **Mismatch → relay starts** (baseline rule). Same language → agent stays silent for the whole call
+- Dominant-language lock: code-mixed borrowings don't flip the lock
 
-**Artifact:** cold-start session; agent infers hi/kn itself.
+**Artifact:** cold-start session; agent infers languages itself.
 **Test:**
-- hi + kn speakers → correct pair lock, translation begins
+- hi + kn speakers → pair locks, relay begins within ~2 exchanges
 - hi + hi speakers → agent never emits audio
 
 ---
 
-## Phase 5 — Drift engine & escalation ladder (~2 h)
-
-**Goal:** the agent knows *when* to intervene. Testable **offline** via a replay harness — no audio needed.
-
-Tasks:
-- Rolling bilingual memory (last N turns) + static context (trip ID, OTP, glossary)
-- Task slot store: `pickup_point · landmark · driver_location · eta · otp_exchanged · blocker · agreed_next_action`
-- Hard triggers in code: confusion lexicon (hi/kn), wake phrase, repeated question (fuzzy vs last 3 turns), >6 s post-question silence, safety keywords
-- Soft signals: differing stable languages, low STT confidence, empty key slots after K turns, contradiction, frustration
-- One strict-JSON classifier call per turn (async, may lag one turn): `{drift, evidence[], task_progress, frustration, safety}`
-- Ladder FSM: `PASSIVE_MONITOR → WATCH → OFFER_HELP → ACTIVE_MEDIATION → SAFETY_ESCALATION`
-
-**Artifact:** `uv run python -m basha_bridge.replay scenarios/pickup_fail.json`
-— feeds a scripted transcript turn-by-turn, prints state transitions + filled slots.
-**Test:** scenario files assert expected transitions:
-- confusion ×2 + empty pickup slot → `OFFER_HELP`
-- smooth same-language chat → stays `PASSIVE_MONITOR`
-- safety keyword → `SAFETY_ESCALATION` from any state
-
----
-
-## Phase 6 — Active mediation (~2 h)
-
-**Goal:** the agent resolves the pickup task end-to-end.
-
-Tasks:
-- `OFFER_HELP`: one-shot bilingual TTS offer; affirmative reply → `ACTIVE_MEDIATION`
-- Allowed-action mediation: LLM returns one of `ASK_RIDER_PICKUP_POINT · ASK_RIDER_LANDMARK · ASK_DRIVER_LOCATION · ASK_DRIVER_ETA · CONFIRM_WITH_RIDER · CONFIRM_WITH_DRIVER · SUMMARIZE_AND_EXIT · SAFETY_ESCALATE`; turn manager enforces who hears what
-- Slow path: low confidence / dispute / "agent, tell him…" → one sarvam-105b call, constrained to the same action set
-- Exit: required slots filled + agreed next action → bilingual summary → back to `PASSIVE_MONITOR`
-
-**Artifact:** live scripted demo run: failing hi/kn conversation → offer → mediation Q&A → slots filled → bilingual `SUMMARIZE_AND_EXIT`.
-**Test:** full happy-path script completes; final summary contains pickup point, landmark, ETA in both languages.
-
----
-
-## Phase 7 — Demo polish (~2 h)
-
-**Goal:** judge-ready.
-
-Tasks:
-- Live bilingual transcript UI, escalation badge, slot panel (LiveKit data channel)
-- Low-volume (~20%) original audio under the translation
-- Latency ticker on screen
-- 2× full dry runs; record a fallback video
-
-**Artifact:** rehearsed demo + fallback recording.
-**Test:** dry run completes twice without manual intervention.
-
----
-
-## Phase 8 — Hosted deployment (~2 h)
+## Phase 5 — Hosted deployment (~2 h)
 
 **Goal:** rubric criterion 3 — hosted, stable, anyone can use it without us present.
 
 Tasks:
-- Deploy agent worker (Fly.io / Railway / Render): Dockerfile, env secrets, auto-restart; one agent process spawned per room
-- Deploy frontend (Vercel / CF Pages) with a landing page: "Create session" → generates room + two role links (`?role=customer|driver`)
-- LiveKit Cloud already hosts the RTC plane — verify token minting works from the deployed backend
-- Basic hardening: session TTL / room cleanup, rate limit on session creation, health endpoint
-- README with public URL + 3-step "try it yourself" instructions
+- Agent worker on Fly.io / Railway / Render (Docker, secrets, auto-restart; one agent per room); **deploy in India region** (agent↔Sarvam↔LiveKit hops all short)
+- Frontend on Vercel / CF Pages: landing page → "Create session" → room + two role links
+- Session TTL / room cleanup, rate limit on session creation, health endpoint
+- README with public URL + 3-step try-it instructions
 
-**Artifact:** public URL a judge can open cold — create a session, share the second link to another device, talk.
-**Test:**
-- two phones, fresh browsers, no local setup → working mediated call
-- agent worker survives a session ending and serves the next one
-- health endpoint green after 1 h idle
+**Artifact:** public URL a judge can open cold — create session, share second link, talk.
+**Test:** two phones, fresh browsers, no local setup → working relayed call; worker survives session churn; health green after 1 h idle.
+
+---
+
+## Phase 6 — Demo polish (~1–2 h)
+
+**Goal:** judge-ready baseline.
+
+Tasks:
+- Live bilingual transcript UI (segments appear as committed), rolling-lag ticker, language-pair badge
+- Dry runs ×2 + fallback video
+
+**Artifact:** rehearsed demo + recording. **Baseline ships here.**
+
+---
+
+# NICE-TO-HAVE LAYER — in priority order, each independently demoable
+
+## N1 — Drift-gated activation (~2–3 h)
+
+Restores the "silent unless needed" intelligence: mismatch alone no longer auto-starts relay.
+
+- Ladder: `PASSIVE_MONITOR → WATCH (mismatch, silent) → OFFER_HELP (one-shot bilingual offer) → RELAY`
+- Hard triggers (code): confusion lexicon (hi/kn), wake phrase, repeated question, >6 s post-question silence
+- Soft signals + strict-JSON drift classifier (sarvam-105b-conversations, async, may lag one turn)
+- Handles the partial-comprehension case: mixed languages but progressing → stays silent
+
+**Artifact:** `uv run python -m basha_bridge.replay scenarios/*.json` — scripted transcripts assert ladder transitions (progressing mixed-language convo stays in WATCH; confusion ×2 → OFFER_HELP).
+
+## N2 — Task mediation layer (~3 h)
+
+When relay alone isn't resolving the task:
+
+- Slot store: `pickup_point · landmark · driver_location · eta · otp_exchanged · blocker · agreed_next_action` (filled async by the drift classifier call)
+- Allowed-action set: `ASK_RIDER_* · ASK_DRIVER_* · CONFIRM_* · SUMMARIZE_AND_EXIT · SAFETY_ESCALATE`; turn manager enforces who hears what; sarvam-105b slow path for disputes / "agent, tell him…"
+- Exit: slots filled → bilingual summary → back to relay
+
+**Artifact:** scripted stalling conversation → mediation Q&A → slots filled → bilingual summary.
+
+## N3 — Robustness extras
+
+Safety-keyword escalation from any state · mid-call language re-lock on sustained switch · slot panel UI via data channel · barge-in refinement for mediation prompts.
 
 ---
 
@@ -166,18 +149,20 @@ Tasks:
 Deliverable: README section + 2-min spoken narrative. Must cover:
 
 - [ ] **Problem in one line:** rider and driver don't share a language; pickup coordination fails → cancellations, lost revenue, safety risk
-- [ ] **Not a translator app:** the agent is *silent by default* and intervenes only on detected drift — demo this contrast explicitly (same-language call → agent never speaks)
-- [ ] **Why Sarvam specifically:** colloquial code-mixed Indic STT (Saaras), native-script TTS quality (Bulbul), Indic pair translation with colloquial register (Mayura), strict-JSON reasoning (105b) — a generic LLM stack degrades on every one of these
-- [ ] **Sarvam drives the product:** every stage of the pipeline is a Sarvam model; nothing works without them
-- [ ] **Business path:** ride-hailing pickup failure → cancellation cost numbers; expansion to delivery, home services, telehealth; prod path = Exotel/Twilio masked-number calls (architecture already parameterized for 8 kHz telephony)
-- [ ] **Technical depth talking points:** hybrid drift engine (rules + slots + bounded LLM), half-duplex turn manager, barge-in with spare-socket rotation, entity locks (OTP never translated)
+- [ ] **Simultaneous, not consecutive:** translation flows while you speak (~2 s behind) — not a walkie-talkie translator; demo a long sentence to prove lag doesn't grow
+- [ ] **Knows when it's not needed:** same-language call → agent detects it and stays completely silent (demo this contrast)
+- [ ] **Why Sarvam specifically:** colloquial code-mixed Indic STT (Saaras), native-script TTS (Bulbul), Indic-pair colloquial translation (Mayura), strict-JSON reasoning (105b); hi↔kn are both SOV → clause-level simultaneous translation stays coherent
+- [ ] **Sarvam drives the product:** every pipeline stage is a Sarvam model
+- [ ] **Business path:** cancellation cost numbers; expansion to delivery/home services/telehealth; prod path = Exotel/Twilio masked calls (8 kHz parameterized)
+- [ ] **Technical depth:** stable-prefix segment commit, full-duplex dual pipelines, entity locks (OTP never translated), rolling-lag telemetry — and (if N1/N2 land) drift-gated escalation + constrained mediation
 
 ---
 
-## Fallbacks (from HLD §risks)
+## Fallbacks
 
 | Breaks | Fall back to |
 |---|---|
-| Streaming STT/TTS unstable | chunked browser audio → REST STT / non-streaming TTS |
-| LiveKit agent audio issues | push-to-talk for agent mediation only |
-| Everything live | text transcript + TTS playback demo |
+| True STT partials weak/unstable | rolling 1.5–2 s re-transcribed windows (+~1 s lag, proven cookbook pattern) |
+| Streaming TTS issues | per-segment REST TTS into playback queue (+~0.3 s) |
+| Full-duplex audio chaos | half-duplex turn gating (walkie-talkie feel, still live) |
+| LiveKit agent audio issues | push-to-talk relay only |
