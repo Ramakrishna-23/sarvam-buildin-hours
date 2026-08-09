@@ -30,33 +30,33 @@ This is **not just a translator**. It is a **task mediator**.
 ## 3. High-level architecture
 
 ```text
-┌──────────────────┐                  ┌──────────────────┐
-│  Rider Web App   │◄── WebRTC Room ─►│ Driver Web App   │
-│                  │     LiveKit      │                  │
-└───────┬──────────┘                  └─────────┬────────┘
-        │                                       │
-        │ audio/control events                  │ audio/control events
-        └───────────────┬───────────────────────┘
-                        │
-                        ▼
-          ┌────────────────────────────┐
-          │  Sarvam Voice Orchestrator │
-          │  / Agent Worker            │
-          └─────────────┬──────────────┘
-                        │
-       ┌────────────────┼────────────────┐
-       ▼                ▼                ▼
-┌────────────┐   ┌──────────────┐   ┌──────────────┐
-│ Sarvam STT │   │ Drift Engine │   │ Task Mediator│
-│ Saaras v3  │   │ + Rules      │   │ Sarvam-105B  │
-└────────────┘   └──────────────┘   └──────┬───────┘
-                                            │
-                              ┌─────────────┴─────────────┐
-                              ▼                           ▼
-                       ┌──────────────┐            ┌────────────┐
-                       │ Translation  │            │ Sarvam TTS │
-                       │ Mayura v1    │            │ Bulbul v3  │
-                       └──────────────┘            └────────────┘
+┌──────────────────┐                                   ┌──────────────────┐
+│  Rider Web App   │◄──────── LiveKit WebRTC ────────►│ Driver Web App   │
+│                  │         Room / SFU               │                  │
+└────────┬─────────┘                                   └────────┬─────────┘
+         │                                                              │
+         │                agent audio tracks + control                  │
+         └──────────────────────────────┬───────────────────────────────┘
+                                        │
+                                        ▼
+                         ┌────────────────────────────────┐
+                         │ Sarvam Voice Orchestrator      │
+                         │ / LiveKit Agent Participant    │
+                         └───────────────┬────────────────┘
+                                         │
+                ┌────────────────────────┼────────────────────────┐
+                ▼                        ▼                        ▼
+         ┌────────────┐          ┌──────────────┐         ┌──────────────┐
+         │ Sarvam STT │          │ Drift Engine │         │ Task Mediator│
+         │ Saaras v3  │          │ + Rules      │         │ Sarvam-105B  │
+         └────────────┘          └──────────────┘         └──────┬───────┘
+                                                                  │
+                                                    ┌─────────────┴─────────────┐
+                                                    ▼                           ▼
+                                             ┌──────────────┐            ┌────────────┐
+                                             │ Translation  │            │ Sarvam TTS │
+                                             │ Mayura v1    │            │ Bulbul v3  │
+                                             └──────────────┘            └────────────┘
 ```
 
 ---
@@ -68,27 +68,32 @@ This is **not just a translator**. It is a **task mediator**.
 Responsibilities:
 
 - Join LiveKit WebRTC room.
-- Stream user microphone.
-- Receive other participant’s live audio.
-- Send/allow audio monitoring by backend agent.
+- Publish user microphone.
+- Receive the other participant’s live audio.
+- Receive only the relevant agent track(s) for that user.
 - Receive agent events:
   - `agent_joined`
   - `your_turn`
   - `wait`
   - `resolved`
-- Play targeted agent TTS audio locally.
+- Respect track/role metadata for selective subscription during mediation.
 - Show live status/transcript/summary.
 
 ### B. LiveKit WebRTC Room
 
 Responsibilities:
 
-- Real-time human-to-human audio.
-- Gives demo a live call feel.
-- Provides separate participant identity.
-- Enables future agent-as-room-participant model.
+- Real-time rider ↔ driver conversation.
+- Agent joins the room as a proper LiveKit participant.
+- Provides separate participant identity and track ownership.
+- Carries managed tracks for:
+  - rider mic
+  - driver mic
+  - agent-to-rider audio
+  - agent-to-driver audio
+- Supports selective subscription / track targeting during mediation.
 
-For MVP, LiveKit handles human audio. Agent audio can be sent separately to browsers and played locally.
+For MVP, LiveKit carries both human audio and agent audio. The agent stays silent in monitor mode and only publishes audio tracks during intervention.
 
 ### C. Sarvam Voice Orchestrator / Agent Worker
 
@@ -96,7 +101,8 @@ This is the central backend service.
 
 Responsibilities:
 
-- Subscribe to / receive user audio.
+- Join the LiveKit room as a proper agent participant.
+- Subscribe to rider and driver audio tracks.
 - Run STT per participant.
 - Maintain transcript.
 - Infer speaker language profile.
@@ -105,9 +111,12 @@ Responsibilities:
 - Run task mediation state machine.
 - Call Sarvam LLM with structured output.
 - Call translation and TTS.
-- Route agent messages/audio to the right user.
+- Publish managed agent audio tracks to the room:
+  - Hindi/targeted track for rider
+  - Kannada/targeted track for driver
+- Attach role/target metadata so clients subscribe only to intended tracks.
 
-We should use Sarvam’s voice-agent setup where useful, especially for STT/TTS/LLM integrations, but the mediation logic remains custom.
+We should use Sarvam’s voice-agent setup where useful, especially for LiveKit/STT/TTS/LLM integrations, but the mediation logic remains custom.
 
 ### D. Sarvam STT
 
@@ -215,19 +224,21 @@ Important rule:
 
 ```text
 1. Rider and driver join LiveKit room.
-2. Backend creates session state.
-3. Agent starts in PASSIVE_MONITOR.
-4. No agent audio is played.
+2. Agent worker joins the same room as a silent participant.
+3. Backend creates session state.
+4. Agent starts in PASSIVE_MONITOR.
+5. Agent subscribes to human tracks but publishes no audio yet.
 ```
 
 ### Flow 2: Passive monitoring
 
 ```text
 1. Humans talk normally over WebRTC.
-2. Agent silently transcribes both sides.
-3. Language profiles are inferred.
-4. Drift engine evaluates every turn.
-5. Agent remains silent unless drift is detected.
+2. Agent participant subscribes to both human audio tracks.
+3. Agent silently transcribes both sides.
+4. Language profiles are inferred.
+5. Drift engine evaluates every turn.
+6. Agent publishes no audio unless drift is detected.
 ```
 
 ### Flow 3: Drift detection
@@ -250,7 +261,7 @@ Agent announces:
 
 > “I’ll help resolve the pickup. Please speak one at a time.”
 
-This is played in each participant’s language.
+This is published through managed agent tracks in each participant’s language.
 
 ### Flow 4: Active task mediation
 
@@ -356,20 +367,19 @@ Use the Sarvam voice-agent setup where it reduces implementation effort, but kee
 For hackathon MVP:
 
 ```text
-LiveKit for human-to-human WebRTC.
+LiveKit for rider, driver, and agent participation.
 Custom Sarvam Voice Orchestrator for agent intelligence.
-Targeted agent audio played locally in each browser.
+Agent subscribes to both human tracks and publishes managed targeted audio tracks.
 ```
 
-This avoids the complexity of making the agent a full LiveKit participant immediately.
+This gives the demo a true live mediation feel and keeps all live audio inside the RTC plane.
 
-Future/north-star:
+Implementation note:
 
 ```text
-Agent joins LiveKit room as a real participant,
-subscribes to both tracks,
-publishes targeted audio tracks,
-and supports production telephony integrations.
+Agent publishes separate managed tracks per target/role,
+for example agent-to-rider and agent-to-driver,
+with metadata-driven subscription control.
 ```
 
 ---
@@ -393,7 +403,7 @@ Push-to-talk should be fallback, not primary demo.
 | Risk | Mitigation |
 |---|---|
 | Voice-agent SDK assumes one user ↔ one agent | Use SDK primitives, custom orchestrator |
-| Audio routing complexity | Play agent audio locally per browser |
+| Audio routing complexity | Use managed LiveKit agent tracks + metadata-driven selective subscription |
 | False-positive intervention | Use WATCH/OFFER_HELP before active mediation |
 | Latency | Keep agent utterances short; avoid big LLM on every turn |
 | TTS barge-in | Stop playback locally; close/reopen TTS stream |
