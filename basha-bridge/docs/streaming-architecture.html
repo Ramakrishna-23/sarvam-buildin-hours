@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Basha Bridge — Full-Duplex Realtime hi ⇄ kn Interpretation</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#111623; --panel2:#0e1420; --ink:#e8ecf4; --dim:#8b95a7;
+    --hindi:#ffb454; --kannada:#59c2ff; --agent:#95e6cb; --wire:#3a4356;
+    --commit:#d2a6ff; --tts:#f28779; --ok:#aad94c; --bad:#f26d78;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  body{background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px 24px 64px;}
+  .wrap{max-width:1280px;margin:0 auto;}
+  h1{font-size:26px;margin:0 0 4px;} h1 em{color:var(--agent);font-style:normal;}
+  .sub{color:var(--dim);margin:0 0 28px;}
+  .card{background:var(--panel);border:1px solid #1d2536;border-radius:14px;padding:18px 20px;margin-bottom:26px;}
+  .card h2{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 12px;}
+  svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+  svg .mono{font-family:var(--mono);}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;}
+  th,td{text-align:left;padding:7px 12px;border-bottom:1px solid #1d2536;}
+  th{color:var(--dim);font-weight:600;} td code{font-family:var(--mono);color:var(--agent);font-size:12.5px;}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:26px;}
+  @media(max-width:900px){.cols{grid-template-columns:1fr;}}
+  .pill{display:inline-block;border-radius:20px;padding:1px 10px;font-size:12px;font-family:var(--mono);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Basha Bridge <em>· full-duplex realtime interpretation</em></h1>
+<p class="sub">No turns. No “wait 5 s for the sentence to end.” Both directions translate <b>while the person is still speaking</b> — committed clause-by-clause, ~1.5 s behind the speaker’s mouth, like a UN interpreter. Built on LiveKit WebRTC + Sarvam <span style="color:var(--agent)">saaras:v3-realtime</span> partial transcripts.</p>
+
+<!-- ═══════════════════ MAIN PIPELINE DIAGRAM ═══════════════════ -->
+<div class="card">
+<h2>Live pipeline — one direction shown (kn → hi); the mirror (hi → kn) runs simultaneously</h2>
+<svg viewBox="0 0 1240 560" width="100%" role="img" aria-label="Pipeline architecture">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6b8c"/>
+    </marker>
+    <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#95e6cb"/>
+    </marker>
+  </defs>
+
+  <!-- Driver (speaker) -->
+  <g>
+    <rect x="20" y="30" width="200" height="92" rx="12" fill="#0e1420" stroke="#59c2ff" stroke-width="1.5"/>
+    <text x="120" y="58" text-anchor="middle" fill="#59c2ff" font-size="15" font-weight="700">Driver 🎙 (Kannada)</text>
+    <text x="120" y="80" text-anchor="middle" fill="#8b95a7" font-size="12">browser · LiveKit JS</text>
+    <text x="120" y="100" text-anchor="middle" fill="#8b95a7" font-size="12">publishes mic track</text>
+  </g>
+
+  <!-- Rider (listener) -->
+  <g>
+    <rect x="1020" y="30" width="200" height="92" rx="12" fill="#0e1420" stroke="#ffb454" stroke-width="1.5"/>
+    <text x="1120" y="58" text-anchor="middle" fill="#ffb454" font-size="15" font-weight="700">Rider 🎧 (Hindi)</text>
+    <text x="1120" y="80" text-anchor="middle" fill="#8b95a7" font-size="12">hears driver ducked to 20%</text>
+    <text x="1120" y="100" text-anchor="middle" fill="#8b95a7" font-size="12">+ Hindi voice-over track</text>
+  </g>
+
+  <!-- LiveKit room bar -->
+  <rect x="20" y="150" width="1200" height="54" rx="10" fill="#101a2c" stroke="#2a3a54"/>
+  <text x="620" y="172" text-anchor="middle" fill="#e8ecf4" font-size="14" font-weight="700">LiveKit WebRTC Room (SFU)</text>
+  <text x="620" y="191" text-anchor="middle" fill="#8b95a7" font-size="12">tracks: driver-mic · rider-mic · xlate-to-rider · xlate-to-driver &nbsp;&nbsp;·&nbsp;&nbsp; data channel: transcript + status events</text>
+
+  <path d="M120 122 L120 150" stroke="#5b6b8c" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M1120 204 L1120 122" stroke="#95e6cb" stroke-width="2" marker-end="url(#arrG)"/>
+  <text x="1132" y="140" fill="#95e6cb" font-size="11" class="mono">xlate-to-rider</text>
+
+  <!-- Agent worker box -->
+  <rect x="20" y="232" width="1200" height="300" rx="14" fill="#0e1420" stroke="#95e6cb" stroke-width="1.5"/>
+  <text x="40" y="258" fill="#95e6cb" font-size="14" font-weight="700">Agent worker (Python · joins room as silent participant · subscribes to MIC tracks only → zero echo by construction)</text>
+
+  <!-- Stage 1: ingest -->
+  <g>
+    <rect x="40" y="285" width="170" height="88" rx="10" fill="#111623" stroke="#3a4356"/>
+    <text x="125" y="308" text-anchor="middle" fill="#e8ecf4" font-size="13" font-weight="700">AudioIngest</text>
+    <text x="125" y="327" text-anchor="middle" fill="#8b95a7" font-size="11.5">AudioStream(track,</text>
+    <text x="125" y="342" text-anchor="middle" fill="#8b95a7" font-size="11.5">sample_rate=16000)</text>
+    <text x="125" y="360" text-anchor="middle" fill="#8b95a7" font-size="11.5">100 ms pcm_s16le frames</text>
+  </g>
+
+  <!-- Stage 2: STT -->
+  <g>
+    <rect x="250" y="285" width="200" height="88" rx="10" fill="#111623" stroke="#59c2ff"/>
+    <text x="350" y="306" text-anchor="middle" fill="#59c2ff" font-size="13" font-weight="700">saaras:v3-realtime (WS)</text>
+    <text x="350" y="324" text-anchor="middle" fill="#8b95a7" font-size="11.5" class="mono">stream_type=fast · vad</text>
+    <text x="350" y="341" text-anchor="middle" fill="#8b95a7" font-size="11.5" class="mono">silence_duration_ms=400</text>
+    <text x="350" y="359" text-anchor="middle" fill="#8b95a7" font-size="11.5" class="mono">language auto → pinned</text>
+  </g>
+
+  <!-- Stage 3: chunker -->
+  <g>
+    <rect x="490" y="277" width="220" height="104" rx="10" fill="#171126" stroke="#d2a6ff" stroke-width="1.5"/>
+    <text x="600" y="299" text-anchor="middle" fill="#d2a6ff" font-size="13" font-weight="700">IncrementalChunker ★</text>
+    <text x="600" y="317" text-anchor="middle" fill="#c9b7e8" font-size="11.5">commit clause when:</text>
+    <text x="600" y="333" text-anchor="middle" fill="#8b95a7" font-size="11">stable prefix ×2 · clause boundary</text>
+    <text x="600" y="348" text-anchor="middle" fill="#8b95a7" font-size="11">vad.speech_end / final · max-lag 1.2 s</text>
+    <text x="600" y="366" text-anchor="middle" fill="#8b95a7" font-size="11">⛔ never splits an OTP digit run</text>
+  </g>
+
+  <!-- Stage 4: translate -->
+  <g>
+    <rect x="750" y="285" width="190" height="88" rx="10" fill="#111623" stroke="#aad94c"/>
+    <text x="845" y="306" text-anchor="middle" fill="#aad94c" font-size="13" font-weight="700">mayura:v1 (REST)</text>
+    <text x="845" y="324" text-anchor="middle" fill="#8b95a7" font-size="11.5" class="mono">modern-colloquial</text>
+    <text x="845" y="341" text-anchor="middle" fill="#8b95a7" font-size="11.5" class="mono">output_script=fully-native</text>
+    <text x="845" y="359" text-anchor="middle" fill="#8b95a7" font-size="11.5">OTP/digits shielded ⟦N₀⟧</text>
+  </g>
+
+  <!-- Stage 5: TTS -->
+  <g>
+    <rect x="980" y="285" width="220" height="88" rx="10" fill="#1c1210" stroke="#f28779" stroke-width="1.5"/>
+    <text x="1090" y="306" text-anchor="middle" fill="#f28779" font-size="13" font-weight="700">bulbul:v3 TTS + queue</text>
+    <text x="1090" y="324" text-anchor="middle" fill="#8b95a7" font-size="11.5">wav/16 kHz per clause · ordered</text>
+    <text x="1090" y="341" text-anchor="middle" fill="#8b95a7" font-size="11.5">backlog &gt; 2 → merge + pace 1.15×</text>
+    <text x="1090" y="359" text-anchor="middle" fill="#8b95a7" font-size="11.5">→ AudioSource → xlate track</text>
+  </g>
+
+  <!-- arrows between stages -->
+  <path d="M120 204 L120 285" stroke="#5b6b8c" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="132" y="245" fill="#8b95a7" font-size="11" class="mono">48 kHz frames</text>
+  <path d="M210 329 L250 329" stroke="#5b6b8c" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M450 329 L490 329" stroke="#5b6b8c" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M710 329 L750 329" stroke="#5b6b8c" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M940 329 L980 329" stroke="#5b6b8c" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M1090 285 L1090 204" stroke="#95e6cb" stroke-width="2" marker-end="url(#arrG)"/>
+
+  <!-- wire tag labels under arrows -->
+  <text x="228" y="316" fill="#5b6b8c" font-size="10.5" class="mono" text-anchor="middle">audio_input</text>
+  <text x="470" y="310" fill="#59c2ff" font-size="10.5" class="mono" text-anchor="middle">transcript</text>
+  <text x="470" y="322" fill="#59c2ff" font-size="10.5" class="mono" text-anchor="middle">.partial</text>
+  <text x="730" y="316" fill="#d2a6ff" font-size="10.5" class="mono" text-anchor="middle">clause</text>
+  <text x="960" y="316" fill="#aad94c" font-size="10.5" class="mono" text-anchor="middle">हिन्दी</text>
+
+  <!-- live example strip -->
+  <g>
+    <rect x="40" y="405" width="1160" height="108" rx="10" fill="#0b0e14" stroke="#1d2536"/>
+    <text x="60" y="428" fill="#8b95a7" font-size="12" font-weight="700">LIVE EXAMPLE — driver still mid-sentence, rider already hearing Hindi:</text>
+    <text x="60" y="452" fill="#59c2ff" font-size="13" class="mono">t=0.9s  partial: "ನಾನು ಮೆಜೆಸ್ಟಿಕ್ ಹತ್ತಿರ"        t=1.8s  partial: "…ಇದ್ದೀನಿ. ಗೇಟ್ ಎರಡು ಬಳಿ"</text>
+    <text x="60" y="474" fill="#d2a6ff" font-size="13" class="mono">t=1.4s  commit #1: "ನಾನು ಮೆಜೆಸ್ಟಿಕ್ ಹತ್ತಿರ ಇದ್ದೀನಿ."   t=2.6s  commit #2: "ಗೇಟ್ ಎರಡು ಬಳಿ ಬನ್ನಿ,"</text>
+    <text x="60" y="496" fill="#95e6cb" font-size="13" class="mono">t=2.1s  rider hears: "मैं मैजेस्टिक के पास हूँ।"      t=3.3s  rider hears: "गेट दो के पास आइए,"</text>
+  </g>
+</svg>
+</div>
+
+<!-- ═══════════════════ TURN-BASED VS STREAMING ═══════════════════ -->
+<div class="card">
+<h2>Why this wins — turn-based vs full-duplex timeline (same 4 s utterance)</h2>
+<svg viewBox="0 0 1240 300" width="100%" role="img" aria-label="Latency comparison">
+  <!-- time axis -->
+  <g fill="#8b95a7" font-size="11" class="mono">
+    <line x1="140" y1="30" x2="140" y2="270" stroke="#1d2536"/>
+    <line x1="1180" y1="30" x2="1180" y2="270" stroke="#1d2536"/>
+    <text x="140" y="290" text-anchor="middle">0s</text>
+    <text x="400" y="290" text-anchor="middle">2s</text>
+    <text x="660" y="290" text-anchor="middle">4s</text>
+    <text x="920" y="290" text-anchor="middle">6s</text>
+    <text x="1180" y="290" text-anchor="middle">8s</text>
+    <line x1="400" y1="30" x2="400" y2="270" stroke="#1d2536" stroke-dasharray="3 4"/>
+    <line x1="660" y1="30" x2="660" y2="270" stroke="#1d2536" stroke-dasharray="3 4"/>
+    <line x1="920" y1="30" x2="920" y2="270" stroke="#1d2536" stroke-dasharray="3 4"/>
+  </g>
+
+  <!-- OLD -->
+  <text x="20" y="62" fill="#f26d78" font-size="13" font-weight="700">TURN-BASED</text>
+  <text x="20" y="78" fill="#8b95a7" font-size="11">(what everyone demos)</text>
+  <rect x="140" y="48" width="520" height="26" rx="6" fill="#59c2ff" opacity=".85"/>
+  <text x="400" y="65" text-anchor="middle" fill="#06121f" font-size="12" font-weight="700">driver speaks (4 s)</text>
+  <rect x="660" y="48" width="90" height="26" rx="6" fill="#3a4356"/>
+  <text x="705" y="65" text-anchor="middle" fill="#c7cede" font-size="11">VAD+STT</text>
+  <rect x="750" y="48" width="80" height="26" rx="6" fill="#aad94c" opacity=".8"/>
+  <text x="790" y="65" text-anchor="middle" fill="#0c1602" font-size="11">translate</text>
+  <rect x="830" y="48" width="120" height="26" rx="6" fill="#f28779" opacity=".85"/>
+  <text x="890" y="65" text-anchor="middle" fill="#210a06" font-size="11">TTS synth</text>
+  <rect x="950" y="48" width="230" height="26" rx="6" fill="#ffb454" opacity=".9"/>
+  <text x="1065" y="65" text-anchor="middle" fill="#221302" font-size="12" font-weight="700">rider finally hears</text>
+  <text x="950" y="100" fill="#f26d78" font-size="12" class="mono">first audio at t ≈ 6.2 s ✗</text>
+
+  <!-- NEW -->
+  <text x="20" y="162" fill="#aad94c" font-size="13" font-weight="700">FULL-DUPLEX</text>
+  <text x="20" y="178" fill="#8b95a7" font-size="11">(this demo)</text>
+  <rect x="140" y="148" width="520" height="26" rx="6" fill="#59c2ff" opacity=".85"/>
+  <text x="400" y="165" text-anchor="middle" fill="#06121f" font-size="12" font-weight="700">driver speaks (4 s)</text>
+  <!-- overlapping translated playback -->
+  <rect x="335" y="182" width="150" height="26" rx="6" fill="#95e6cb"/>
+  <text x="410" y="199" text-anchor="middle" fill="#04241a" font-size="11" font-weight="700">clause 1 in Hindi</text>
+  <rect x="500" y="182" width="150" height="26" rx="6" fill="#95e6cb"/>
+  <text x="575" y="199" text-anchor="middle" fill="#04241a" font-size="11" font-weight="700">clause 2 in Hindi</text>
+  <rect x="668" y="182" width="150" height="26" rx="6" fill="#95e6cb"/>
+  <text x="743" y="199" text-anchor="middle" fill="#04241a" font-size="11" font-weight="700">clause 3 in Hindi</text>
+  <text x="335" y="232" fill="#aad94c" font-size="12" class="mono">first audio at t ≈ 1.5 s ✓ — while the driver is still on clause 2</text>
+  <path d="M340 148 q -18 18 0 34" stroke="#aad94c" stroke-width="1.5" fill="none"/>
+</svg>
+</div>
+
+<div class="cols">
+<!-- ═══════════════════ STT WIRE TAGS ═══════════════════ -->
+<div class="card">
+<h2>STT WebSocket — verified wire tags (saaras:v3-realtime)</h2>
+<table>
+<tr><th>dir</th><th>event tag</th><th>payload / role</th></tr>
+<tr><td>→</td><td><code>audio_input</code></td><td><code>audio</code>: base64 pcm_s16le 16 kHz, 100 ms frames</td></tr>
+<tr><td>→</td><td><code>config.update</code></td><td>pin <code>language_code</code> after pair-lock — no socket restart</td></tr>
+<tr><td>→</td><td><code>flush</code> / <code>end</code> / <code>ping</code></td><td>force finalize / teardown / keepalive</td></tr>
+<tr><td>←</td><td><code>session.begin</code></td><td>echoes resolved config (<code>turn_detection</code>, VAD knobs)</td></tr>
+<tr><td>←</td><td><code>vad.speech_start</code></td><td><code>utterance_idx</code>, <code>confidence</code> → barge-in, UI glow</td></tr>
+<tr><td>←</td><td><b><code>transcript.partial</code></b></td><td><code>utterance_idx</code>, <code>text</code> (cumulative-so-far) → <b>feeds chunker</b></td></tr>
+<tr><td>←</td><td><code>transcript.final</code></td><td><code>text</code>, <code>language</code>, <code>language_confidence</code>, <code>start_s/end_s</code></td></tr>
+<tr><td>←</td><td><code>vad.speech_end</code></td><td>flush chunker remainder</td></tr>
+</table>
+</div>
+
+<!-- ═══════════════════ TTS + DATA TAGS ═══════════════════ -->
+<div class="card">
+<h2>TTS + room data-channel tags</h2>
+<table>
+<tr><th>where</th><th>tag</th><th>role</th></tr>
+<tr><td>TTS →</td><td><code>config</code> · <code>text</code> · <code>flush</code></td><td>bulbul WS: reconfigurable mid-stream (<code>pace</code> = catch-up lever)</td></tr>
+<tr><td>TTS ←</td><td><code>audio</code> · <code>event:final</code></td><td>b64 chunks · end-of-request marker</td></tr>
+<tr><td>data ←</td><td><code>utterance.partial</code></td><td>grey live caption row (revisable)</td></tr>
+<tr><td>data ←</td><td><code>utterance.final</code></td><td>caption row solidifies</td></tr>
+<tr><td>data ←</td><td><code>segment.translated</code></td><td>translated caption + per-segment latency</td></tr>
+<tr><td>data ←</td><td><code>tts.active</code></td><td>client ducks original remote voice to 20%</td></tr>
+<tr><td>data ←</td><td><code>pair.locked</code></td><td>“hi-IN ⇄ kn-IN detected” badge</td></tr>
+<tr><td>data ←</td><td><code>latency.tick</code></td><td>ear-to-ear ms ticker on screen 🏆</td></tr>
+</table>
+</div>
+</div>
+
+<!-- ═══════════════════ LATENCY BUDGET ═══════════════════ -->
+<div class="card">
+<h2>Latency budget (ear-to-ear while speaking)</h2>
+<svg viewBox="0 0 1240 120" width="100%">
+  <g font-size="12">
+    <rect x="20"  y="34" width="110" height="30" rx="6" fill="#3a4356"/><text x="75"  y="54" text-anchor="middle" fill="#e8ecf4">ingest 150ms</text>
+    <rect x="132" y="34" width="260" height="30" rx="6" fill="#59c2ff" opacity=".8"/><text x="262" y="54" text-anchor="middle" fill="#06121f" font-weight="700">partial 300–600ms</text>
+    <rect x="394" y="34" width="200" height="30" rx="6" fill="#d2a6ff" opacity=".85"/><text x="494" y="54" text-anchor="middle" fill="#1c0f2e" font-weight="700">commit 200–500ms</text>
+    <rect x="596" y="34" width="140" height="30" rx="6" fill="#aad94c" opacity=".85"/><text x="666" y="54" text-anchor="middle" fill="#0c1602" font-weight="700">mayura 150–300ms</text>
+    <rect x="738" y="34" width="200" height="30" rx="6" fill="#f28779" opacity=".85"/><text x="838" y="54" text-anchor="middle" fill="#210a06" font-weight="700">bulbul 300–500ms</text>
+    <rect x="940" y="34" width="90" height="30" rx="6" fill="#3a4356"/><text x="985" y="54" text-anchor="middle" fill="#e8ecf4">play 100ms</text>
+    <text x="1050" y="55" fill="#aad94c" font-size="16" font-weight="800">≈ 1.2 – 2.0 s</text>
+    <text x="20" y="95" fill="#8b95a7" font-size="12">Turn-end path is fast too: <tspan class="mono" fill="#59c2ff">silence_duration_ms=400</tspan> → final lands 400 ms after the speaker stops, and only the last clause is still in flight.</text>
+  </g>
+</svg>
+</div>
+
+</div>
+</body>
+</html>

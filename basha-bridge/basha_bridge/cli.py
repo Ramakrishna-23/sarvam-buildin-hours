@@ -74,14 +74,31 @@ async def run_checks() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="basha-bridge")
-    parser.add_argument(
-        "--check", action="store_true", help="validate Sarvam key and LiveKit join"
-    )
+    parser.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
+    sub = parser.add_subparsers(dest="cmd")
+
+    sub.add_parser("check", help="validate Sarvam key and LiveKit join")
+
+    p_agent = sub.add_parser("agent", help="run the translation agent in a room")
+    p_agent.add_argument("--room", default="demo")
+
+    p_serve = sub.add_parser("serve", help="serve the demo frontend + token API")
+    p_serve.add_argument("--port", type=int, default=8080)
+
     args = parser.parse_args()
 
-    if args.check:
+    if args.check or args.cmd == "check":
         sys.exit(asyncio.run(run_checks()))
-    parser.print_help()
+    elif args.cmd == "agent":
+        from .agent import run_agent
+
+        asyncio.run(run_agent(args.room))
+    elif args.cmd == "serve":
+        from .server import run_server
+
+        run_server(args.port)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
