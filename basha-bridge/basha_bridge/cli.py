@@ -85,6 +85,14 @@ def main() -> None:
     p_serve = sub.add_parser("serve", help="serve the demo frontend + token API")
     p_serve.add_argument("--port", type=int, default=8080)
 
+    p_sim = sub.add_parser("simulate", help="join a room as a fake participant")
+    p_sim.add_argument("--room", default="demo")
+    p_sim.add_argument("--id", default="driver")
+    p_sim.add_argument("--fixture", default="kn_pickup.wav")
+    p_sim.add_argument("--delay", type=float, default=0.0)
+    p_sim.add_argument("--repeat", type=int, default=1)
+    p_sim.add_argument("--record", default=None)
+
     p_replay = sub.add_parser("replay", help="replay drift scenarios offline")
     p_replay.add_argument("scenario", nargs="+")
     p_replay.add_argument("--llm", action="store_true", help="use sarvam-105b")
@@ -102,6 +110,16 @@ def main() -> None:
         from .server import run_server
 
         run_server(args.port)
+    elif args.cmd == "simulate":
+        from .simulate import run_simulation
+
+        sys.exit(
+            asyncio.run(
+                run_simulation(
+                    args.room, args.id, args.fixture, args.delay, args.repeat, args.record
+                )
+            )
+        )
     elif args.cmd == "replay":
         from pathlib import Path
 

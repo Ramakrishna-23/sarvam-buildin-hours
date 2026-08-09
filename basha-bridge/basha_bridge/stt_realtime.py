@@ -19,6 +19,12 @@ log = logging.getLogger(__name__)
 
 EventHandler = Callable[[object], Awaitable[None]]
 
+# The server closes the socket on inactivity, and LiveKit stops delivering
+# frames from a muted/silent track — so we keep the stream continuous with
+# silence rather than letting it lapse.
+KEEPALIVE_GAP_S = 0.5
+SILENCE_FRAME = b"\x00" * (16000 * 2 // 10)  # 100 ms of 16 kHz pcm_s16le
+
 
 class SttSession:
     def __init__(
@@ -94,7 +100,10 @@ class SttSession:
 
     async def _sender(self, sock) -> None:
         while True:
-            pcm = await self._audio_q.get()
+            try:
+                pcm = await asyncio.wait_for(self._audio_q.get(), KEEPALIVE_GAP_S)
+            except asyncio.TimeoutError:
+                pcm = SILENCE_FRAME  # keep the socket alive through pauses
             if pcm is None:
                 return
             await sock.send_realtime_audio_input(

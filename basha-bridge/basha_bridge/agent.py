@@ -8,9 +8,11 @@ listener, and mirrors all bus events onto the room data channel.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
+import wave
 
 from livekit import api, rtc
 from sarvamai import AsyncSarvamAI
@@ -31,8 +33,42 @@ LOCK_FINALS = int(os.getenv("BB_LOCK_FINALS", "1"))
 LOCK_MIN_CONF = float(os.getenv("BB_LOCK_MIN_CONF", "0.5"))
 FRAME_BYTES = SAMPLE_RATE * 2 // 10  # 100 ms
 MEDIATION_ON = os.getenv("BB_MEDIATION", "1") != "0"
+MIN_LOCK_CHARS = int(os.getenv("BB_MIN_LOCK_CHARS", "12"))
+LID_MODEL = os.getenv("BB_LID_MODEL", "saaras:v3")
+LID_MIN_BYTES = SAMPLE_RATE * 2 * 2  # need ~2 s of audio for a reliable call
+LID_MAX_BYTES = SAMPLE_RATE * 2 * 12
+LID_TIMEOUT_S = 10.0
+# Demo safety valve: BB_FORCE_LANGS="rider:hi-IN,driver:kn-IN" skips detection.
+FORCE_LANGS = {
+    part.split(":")[0].strip(): part.split(":")[1].strip()
+    for part in os.getenv("BB_FORCE_LANGS", "").split(",")
+    if ":" in part
+}
 
 OFFER_TEXT = "I can help sort out the pickup. Should I help?"
+
+
+def _has_speech(pcm: bytes, threshold: int = 500) -> bool:
+    """Cheap peak check on s16le — filters silence/keepalive out of the LID buffer."""
+    peak = 0
+    for i in range(0, len(pcm) - 1, 64):  # sample every 32nd frame; plenty
+        v = int.from_bytes(pcm[i : i + 2], "little", signed=True)
+        peak = max(peak, abs(v))
+        if peak > threshold:
+            return True
+    return False
+
+
+def script_language(text: str) -> str | None:
+    """Identify language from the transcript's script — deterministic, and more
+    reliable than auto-LID on short colloquial utterances."""
+    kn = sum(1 for ch in text if "ಀ" <= ch <= "೿")
+    dev = sum(1 for ch in text if "ऀ" <= ch <= "ॿ")
+    if kn > dev and kn >= 3:
+        return "kn-IN"
+    if dev > kn and dev >= 3:
+        return "hi-IN"
+    return None
 
 
 class Participant:
@@ -44,6 +80,8 @@ class Participant:
         self.source: rtc.AudioSource | None = None
         self.lang: str | None = None
         self._lang_votes: list[str] = []
+        self.lid_buffer = bytearray()  # first-utterance audio for REST language ID
+        self.lid_running = False
 
 
 class AgentSession:
@@ -103,8 +141,16 @@ class AgentSession:
             track, sample_rate=SAMPLE_RATE, num_channels=1, frame_size_ms=100
         )
         async for ev in stream:
+            data = bytes(ev.frame.data)
             if person.stt is not None:
-                await person.stt.send_audio(bytes(ev.frame.data))
+                await person.stt.send_audio(data)
+            # Keep a rolling window of recent *speech* for REST language ID.
+            # Buffering from the front would fill with silence before a late
+            # joiner ever speaks, and LID on silence returns a random language.
+            if person.lang is None and _has_speech(data):
+                person.lid_buffer.extend(data)
+                if len(person.lid_buffer) > LID_MAX_BYTES:
+                    del person.lid_buffer[: len(person.lid_buffer) - LID_MAX_BYTES]
 
     async def _wire_person(self, person: Participant) -> None:
         # outbound track carrying translations TO this person
@@ -127,8 +173,15 @@ class AgentSession:
                         self._brain(identity, text, getattr(msg, "language", None))
                     )
 
+        forced = FORCE_LANGS.get(person.identity)
+        if forced:
+            person.lang = forced
+            log.info("[%s] language forced to %s", person.identity, forced)
         person.stt = SttSession(
-            self.client, on_event=on_stt_event, language_code="auto", name=person.identity
+            self.client,
+            on_event=on_stt_event,
+            language_code=forced or "auto",
+            name=person.identity,
         )
         asyncio.create_task(person.stt.run(), name=f"stt:{person.identity}")
 
@@ -148,20 +201,77 @@ class AgentSession:
                     out_pcm=listener.out_pcm,
                 )
                 speaker.pipeline.start()
+        # both languages already known (forced) — activate without detection
+        if not self.locked and a.lang and b.lang and a.lang != b.lang:
+            self.locked = True
+            for speaker, listener in ((a, b), (b, a)):
+                speaker.pipeline.activate(speaker.lang, listener.lang)
+            asyncio.create_task(
+                self.emit(
+                    {"tag": "pair.locked", "pair": {a.identity: a.lang, b.identity: b.lang}}
+                )
+            )
 
     # ── language pair lock ────────────────────────────────────────────────
+
+    async def _detect_language(self, person: Participant) -> None:
+        """Streaming auto-LID mislabels Kannada as English (it translates rather
+        than transcribes), so the pair lock uses REST batch STT with
+        language_code='unknown', which returns a reliable code + native script.
+        """
+        if person.lid_running or person.lang or len(person.lid_buffer) < LID_MIN_BYTES:
+            return
+        person.lid_running = True
+        audio = bytes(person.lid_buffer)
+        try:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(SAMPLE_RATE)
+                w.writeframes(audio)
+            buf.seek(0)
+            buf.name = "utt.wav"
+            resp = await asyncio.wait_for(
+                self.client.speech_to_text.transcribe(
+                    file=buf, model=LID_MODEL, language_code="unknown"
+                ),
+                LID_TIMEOUT_S,
+            )
+            lang = getattr(resp, "language_code", None)
+            text = (getattr(resp, "transcript", "") or "").strip()
+            by_script = script_language(text)
+            log.info(
+                "[%s] REST LID: %s (script=%s) %r", person.identity, lang, by_script, text[:50]
+            )
+            if by_script and by_script != lang:
+                lang = by_script  # script beats the label when they disagree
+            if lang and len(text) >= MIN_LOCK_CHARS:
+                person.lang = lang
+                person.lid_buffer.clear()
+        except Exception:
+            log.exception("[%s] REST language ID failed", person.identity)
+        finally:
+            person.lid_running = False
 
     async def _maybe_lock(self, identity: str, msg) -> None:
         if self.locked or getattr(msg, "event", None) != "transcript.final":
             return
-        lang = getattr(msg, "language", None)
-        conf = getattr(msg, "language_confidence", None)
-        if not lang or (conf is not None and conf < LOCK_MIN_CONF):
-            return
         person = self.people[identity]
-        person._lang_votes.append(lang)
-        if person._lang_votes.count(lang) >= LOCK_FINALS:
-            person.lang = lang
+        text = (getattr(msg, "text", "") or "").strip()
+        log.info(
+            "lock candidate %s: streamLID=%s text=%r",
+            identity,
+            getattr(msg, "language", None),
+            text[:60],
+        )
+        # Silence/keepalive frames produce tiny finals — never lock on those.
+        if len(text) < MIN_LOCK_CHARS:
+            return
+        if person.lang is None:
+            await self._detect_language(person)
+        if person.lang is None:
+            return
         locked_people = [p for p in self.people.values() if p.lang]
         if len(locked_people) != 2:
             return
