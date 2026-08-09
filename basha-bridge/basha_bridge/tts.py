@@ -6,6 +6,21 @@ from sarvamai import AsyncSarvamAI
 VOICE_FOR_LANGUAGE = {"hi-IN": "amit", "kn-IN": "rohan"}
 
 
+async def synthesize_segment_stream(
+    client: AsyncSarvamAI, text: str, language: str, sample_rate: int = 16000
+):
+    """Yield raw pcm_s16le chunks as synthesis progresses (first chunk = playable)."""
+    async for chunk in client.text_to_speech.convert_stream(
+        text=text,
+        language_code=language,
+        speaker=VOICE_FOR_LANGUAGE.get(language, "amit"),
+        model="bulbul:v3",
+        speech_sample_rate=sample_rate,
+        output_audio_codec="linear16",
+    ):
+        yield chunk
+
+
 async def synthesize_segment(
     client: AsyncSarvamAI, text: str, language: str, sample_rate: int = 16000
 ) -> bytes:

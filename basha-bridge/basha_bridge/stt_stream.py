@@ -30,6 +30,7 @@ async def stream_partials(
         encoding="linear16",
         sample_rate=str(sample_rate),
         endpointing="vad",
+        silence_duration_ms="500",
     ) as ws:
 
         async def send() -> None:

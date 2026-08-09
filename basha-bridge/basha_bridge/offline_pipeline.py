@@ -21,7 +21,7 @@ from .segmenter import Segmenter
 from .stt_rest import detect_language
 from .stt_stream import stream_partials
 from .translate import translate_segment
-from .tts import synthesize_segment
+from .tts import synthesize_segment_stream
 
 CHUNK_MS = 100
 PAIR = {"kn-IN": "hi-IN", "hi-IN": "kn-IN"}
@@ -38,10 +38,15 @@ async def process_segment(client, seg: str, source: str, target: str, t0: float,
     t_commit = time.monotonic() - t0
     translated = await translate_segment(client, seg, source, target)
     t_translated = time.monotonic() - t0
-    audio = await synthesize_segment(client, translated, target)
+    pcm = bytearray()
+    t_first_audio = None
+    async for chunk in synthesize_segment_stream(client, translated, target):
+        if t_first_audio is None:
+            t_first_audio = time.monotonic() - t0
+        pcm.extend(chunk)
     t_audio = time.monotonic() - t0
-    audio_parts[idx] = audio
-    rows.append((idx, seg, translated, t_commit, t_translated, t_audio))
+    audio_parts[idx] = bytes(pcm)
+    rows.append((idx, seg, translated, t_commit, t_translated, t_first_audio or t_audio, t_audio))
 
 
 async def main() -> None:
@@ -82,9 +87,9 @@ async def main() -> None:
     await asyncio.gather(*tasks)
 
     rows.sort()
-    print(f"\n{'seg':>3} {'commit':>7} {'transl':>7} {'audio':>7} {'t+tts':>6}  text")
-    for i, seg, translated, tc, tt, ta in rows:
-        print(f"{i:>3} {tc:6.2f}s {tt:6.2f}s {ta:6.2f}s {ta - tc:5.2f}s  {seg}  ->  {translated}")
+    print(f"\n{'seg':>3} {'commit':>7} {'transl':>7} {'1st-aud':>7} {'done':>7} {'c->1st':>6}  text")
+    for i, seg, translated, tc, tt, tfa, ta in rows:
+        print(f"{i:>3} {tc:6.2f}s {tt:6.2f}s {tfa:6.2f}s {ta:6.2f}s {tfa - tc:5.2f}s  {seg}  ->  {translated}")
 
     out = io.BytesIO()
     with wave.open(out, "wb") as wf_out:
@@ -92,15 +97,14 @@ async def main() -> None:
         wf_out.setsampwidth(2)
         wf_out.setframerate(sample_rate)
         for i in sorted(audio_parts):
-            with wave.open(io.BytesIO(audio_parts[i]), "rb") as wf_in:
-                wf_out.writeframes(wf_in.readframes(wf_in.getnframes()))
+            wf_out.writeframes(audio_parts[i])
     Path("out.wav").write_bytes(out.getvalue())
 
     if rows:
         first_audio = min(r[5] for r in rows)
         avg_pipe = sum(r[5] - r[3] for r in rows) / len(rows)
-        print(f"\naudio duration {duration:.1f}s | first translated audio ready at {first_audio:.2f}s"
-              f" | avg commit->audio {avg_pipe:.2f}s | wrote out.wav")
+        print(f"\naudio duration {duration:.1f}s | first playable audio at {first_audio:.2f}s"
+              f" | avg commit->first-audio {avg_pipe:.2f}s | wrote out.wav")
 
 
 if __name__ == "__main__":
