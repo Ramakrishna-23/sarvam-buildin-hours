@@ -76,7 +76,9 @@ agent_track_name = agent-hi
 LiveKit track PCM → Saaras realtime STT → Segmenter → Mayura translate → Bulbul TTS → LiveKit agent audio track
 ```
 
-5. Customer hears original driver audio ducked to ~20% plus Hindi agent relay at full volume.
+5. Customer hears original driver audio ducked to a very low level plus Hindi agent relay at full volume.
+
+In Phase 2, the customer is intentionally listen-only to prevent feedback loops.
 
 ## 6. Success criteria
 
@@ -90,3 +92,4 @@ LiveKit track PCM → Saaras realtime STT → Segmenter → Mayura translate →
 - The customer should attach the `agent-hi` audio track. Driver ignores the agent relay track in this phase.
 - If the agent logs no source track, confirm the driver identity is exactly `driver`.
 - If there is no TTS output, first run Phase 1 offline artifact to verify Sarvam credentials and pipeline health.
+- If relay sounds looped or chaotic, confirm the customer page says `listen-only in Phase 2`; only the driver should publish mic audio.

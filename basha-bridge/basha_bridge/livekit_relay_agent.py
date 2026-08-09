@@ -29,8 +29,11 @@ from .tts import synthesize_segment_stream
 
 AGENT_IDENTITY = "relay-agent"
 AGENT_TRACK_NAME = "agent-hi"
-SAMPLE_RATE = 16000
+STT_SAMPLE_RATE = 16000
+TTS_SAMPLE_RATE = 16000
+LIVEKIT_SAMPLE_RATE = 48000
 NUM_CHANNELS = 1
+FRAME_MS = 20
 
 
 @dataclass
@@ -67,7 +70,7 @@ def make_token(identity: str, room_name: str) -> str:
     )
 
 
-async def frame_bytes(track: rtc.Track, sample_rate: int = SAMPLE_RATE):
+async def frame_bytes(track: rtc.Track, sample_rate: int = STT_SAMPLE_RATE):
     """Yield mono pcm_s16le bytes from a LiveKit audio track.
 
     AudioStream can request 16 kHz mono output, so this is the plan's
@@ -88,9 +91,9 @@ async def frame_bytes(track: rtc.Track, sample_rate: int = SAMPLE_RATE):
 
 async def publish_agent_track(room: rtc.Room, track_name: str) -> rtc.AudioSource:
     source = rtc.AudioSource(
-        sample_rate=SAMPLE_RATE,
+        sample_rate=LIVEKIT_SAMPLE_RATE,
         num_channels=NUM_CHANNELS,
-        queue_size_ms=2000,
+        queue_size_ms=1000,
     )
     track = rtc.LocalAudioTrack.create_audio_track(track_name, source)
     options = rtc.TrackPublishOptions()
@@ -100,26 +103,65 @@ async def publish_agent_track(room: rtc.Room, track_name: str) -> rtc.AudioSourc
     return source
 
 
-async def play_pcm(source: rtc.AudioSource, pcm: bytes, sample_rate: int = SAMPLE_RATE) -> None:
-    if not pcm:
-        return
-    # AudioFrame requires full int16 samples.
-    if len(pcm) % 2:
-        pcm = pcm[:-1]
-    if not pcm:
-        return
-    frame = rtc.AudioFrame(
-        pcm,
-        sample_rate,
-        NUM_CHANNELS,
-        len(pcm) // 2,
-    )
-    await source.capture_frame(frame)
+class LiveKitPcmPublisher:
+    """Publish finite TTS PCM as properly framed LiveKit audio.
+
+    Sarvam TTS gives us linear16 chunks at TTS_SAMPLE_RATE. LiveKit backend
+    publishing docs use 48 kHz audio and small frames, so we resample once and
+    capture 20 ms frames. This avoids choppy/loop-like playback artifacts from
+    pushing arbitrary TTS chunk sizes directly into the WebRTC source.
+    """
+
+    def __init__(self, source: rtc.AudioSource):
+        self.source = source
+        self.resampler = rtc.AudioResampler(
+            input_rate=TTS_SAMPLE_RATE,
+            output_rate=LIVEKIT_SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+        )
+        self.pending = bytearray()
+        self.frame_bytes = LIVEKIT_SAMPLE_RATE * NUM_CHANNELS * 2 * FRAME_MS // 1000
+
+    async def push(self, pcm: bytes) -> None:
+        if not pcm:
+            return
+        if len(pcm) % 2:
+            pcm = pcm[:-1]
+        for frame in self.resampler.push(bytearray(pcm)):
+            await self._push_output(bytes(frame.data.cast("b")))
+
+    async def flush(self) -> None:
+        for frame in self.resampler.flush():
+            await self._push_output(bytes(frame.data.cast("b")))
+        if self.pending:
+            await self._capture(bytes(self.pending))
+            self.pending.clear()
+
+    async def _push_output(self, data: bytes) -> None:
+        self.pending.extend(data)
+        while len(self.pending) >= self.frame_bytes:
+            frame = bytes(self.pending[: self.frame_bytes])
+            del self.pending[: self.frame_bytes]
+            await self._capture(frame)
+
+    async def _capture(self, pcm: bytes) -> None:
+        if len(pcm) % 2:
+            pcm = pcm[:-1]
+        if not pcm:
+            return
+        frame = rtc.AudioFrame(
+            pcm,
+            LIVEKIT_SAMPLE_RATE,
+            NUM_CHANNELS,
+            len(pcm) // 2,
+        )
+        await self.source.capture_frame(frame)
 
 
 async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: RelayConfig) -> None:
     client = AsyncSarvamAI(api_subscription_key=config.SARVAM_API_KEY)
     segmenter = Segmenter()
+    publisher = LiveKitPcmPublisher(audio_source)
     segment_queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
     started = time.monotonic()
 
@@ -143,7 +185,7 @@ async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: Rela
                     client,
                     translated,
                     cfg.target_language,
-                    sample_rate=SAMPLE_RATE,
+                    sample_rate=TTS_SAMPLE_RATE,
                 ):
                     if first:
                         print(
@@ -151,7 +193,8 @@ async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: Rela
                             flush=True,
                         )
                         first = False
-                    await play_pcm(audio_source, bytes(chunk), SAMPLE_RATE)
+                    await publisher.push(bytes(chunk))
+                await publisher.flush()
             except Exception as exc:
                 print(f"segment {idx} failed: {exc!r}", flush=True)
             finally:
@@ -161,9 +204,9 @@ async def relay_track(track: rtc.Track, audio_source: rtc.AudioSource, cfg: Rela
     idx = 0
     try:
         async for event, text in stream_partials(
-            frame_bytes(track, SAMPLE_RATE),
+            frame_bytes(track, STT_SAMPLE_RATE),
             language_code=cfg.source_language,
-            sample_rate=SAMPLE_RATE,
+            sample_rate=STT_SAMPLE_RATE,
             stream_type="fast",
         ):
             segments: list[str] = []

@@ -70,7 +70,7 @@ function volumeForAudio(publication, participant) {
   const participantRole = roleFromParticipant(participant);
   const trackName = publication.trackName || publication.name || '';
   if (participantRole === 'agent' && trackName.includes('agent-hi')) return 1.0;
-  if (role === 'customer' && participant.identity === 'driver') return 0.2;
+  if (role === 'customer' && participant.identity === 'driver') return 0.08;
   return 1.0;
 }
 
@@ -146,17 +146,25 @@ async function join(event) {
   await room.connect(tokenData.url, tokenData.token);
   log(`connected as ${identity}`);
 
-  const mic = await createLocalAudioTrack({
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  });
-  await room.localParticipant.publishTrack(mic, { name: 'mic' });
-  const localAudio = mic.attach();
-  localAudio.muted = true;
-  localAudio.controls = true;
-  localEl.appendChild(localAudio);
-  log('published microphone');
+  // Phase 2 is one-direction: driver Kannada -> customer Hindi.
+  // Keep customer listen-only to avoid feedback loops where relay audio is
+  // picked up by the customer mic, sent back to the driver, then re-relayed.
+  if (role === 'driver') {
+    const mic = await createLocalAudioTrack({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    await room.localParticipant.publishTrack(mic, { name: 'mic' });
+    const localAudio = mic.attach();
+    localAudio.muted = true;
+    localAudio.controls = true;
+    localEl.appendChild(localAudio);
+    log('published microphone');
+  } else {
+    localEl.textContent = 'listen-only in Phase 2';
+    log('customer is listen-only in Phase 2');
+  }
 
   // Attach any already-subscribed remote tracks.
   room.remoteParticipants.forEach((participant) => {
