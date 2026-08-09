@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Basha Bridge — Design &amp; Implementation Docs</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#161a23; --panel2:#1c2130; --text:#e6e9f0; --muted:#9aa3b5;
+    --accent:#5eb0ef; --accent2:#7ee2b8; --warn:#f5c26b; --danger:#f28b82;
+    --border:#2a3040; --code:#12151d; --radius:10px;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f7f8fa; --panel:#ffffff; --panel2:#eef1f6; --text:#1c2130; --muted:#5b6474;
+      --accent:#1668a8; --accent2:#0e7a52; --warn:#9a6a12; --danger:#b3362c;
+      --border:#d8dde8; --code:#f0f2f7; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text)}
+  .layout{display:flex;min-height:100vh}
+  nav{width:250px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);padding:24px 16px;position:sticky;top:0;height:100vh;overflow-y:auto}
+  nav h1{font-size:17px;margin:0 0 4px;color:var(--accent)}
+  nav .sub{font-size:12px;color:var(--muted);margin-bottom:18px}
+  nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 10px;border-radius:6px;font-size:13.5px}
+  nav a:hover{background:var(--panel2);color:var(--text)}
+  nav .grp{margin:14px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent2)}
+  main{flex:1;max-width:960px;padding:36px 48px 96px}
+  h2{font-size:24px;border-bottom:2px solid var(--border);padding-bottom:8px;margin-top:56px;color:var(--accent)}
+  h2:first-of-type{margin-top:0}
+  h3{font-size:18px;margin-top:32px;color:var(--text)}
+  h4{font-size:15px;margin-top:24px;color:var(--accent2)}
+  p{color:var(--text)}
+  .muted{color:var(--muted)}
+  code{background:var(--code);padding:2px 6px;border-radius:5px;font-size:13px;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:var(--radius);padding:16px;overflow-x:auto;font-size:12.5px;line-height:1.55}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:13.5px}
+  th,td{border:1px solid var(--border);padding:8px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);font-weight:600}
+  tr:nth-child(even) td{background:var(--panel)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin:18px 0}
+  .callout{border-left:4px solid var(--accent);background:var(--panel);padding:12px 18px;border-radius:0 var(--radius) var(--radius) 0;margin:16px 0}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout.ok{border-left-color:var(--accent2)}
+  .callout.risk{border-left-color:var(--danger)}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 12px;font-size:12px;margin:2px 4px 2px 0;color:var(--muted)}
+  .kbd{font-family:ui-monospace,monospace;font-size:12px;background:var(--panel2);border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:1px 6px}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0}
+  .flow .st{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:13px;font-weight:600}
+  .flow .ar{color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}nav{display:none}main{padding:24px}}
+  .check{list-style:none;padding-left:0}
+  .check li::before{content:"☐ ";color:var(--accent2)}
+  footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--border);font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <h1>Basha Bridge</h1>
+  <div class="sub">Voice Intermediary Task Mediator — design docs</div>
+  <div class="grp">Overview</div>
+  <a href="#vision">Vision &amp; behavior</a>
+  <a href="#arch">Architecture</a>
+  <a href="#stack">Sarvam voice stack</a>
+  <div class="grp">LLD</div>
+  <a href="#session">Session &amp; transcript schema</a>
+  <a href="#events">Browser ⇄ backend events</a>
+  <a href="#sarvam-api">Sarvam API contracts</a>
+  <a href="#slots">Task slots</a>
+  <a href="#drift">Drift engine</a>
+  <a href="#turns">Turn manager</a>
+  <a href="#seq">End-to-end sequences</a>
+  <a href="#fallbacks">Fallback ladder</a>
+  <div class="grp">Implementation</div>
+  <a href="#tech">Tech stack &amp; repo</a>
+  <a href="#milestones">Milestones</a>
+  <a href="#code">Key code sketches</a>
+  <a href="#prompts">Prompts</a>
+  <a href="#testing">Testing</a>
+  <a href="#runbook">Demo runbook</a>
+  <a href="#dod">Definition of done</a>
+</nav>
+<main>
+
+<h2 id="vision">1. Vision &amp; product behavior</h2>
+<p>A live WebRTC-based AI mediator that <strong>silently monitors</strong> a two-person conversation (demo: rider ⇄ driver pickup coordination), detects <strong>communication drift</strong>, and intervenes only when the task is actually breaking down. It is a <strong>task mediator, not a translator</strong>.</p>
+<div class="card">
+  <span class="pill">No pre-assumed languages</span>
+  <span class="pill">Silent monitor first</span>
+  <span class="pill">Mismatch ≠ drift</span>
+  <span class="pill">Escalation ladder, not binary</span>
+  <span class="pill">LLM picks from bounded actions</span>
+  <span class="pill">WebRTC, not push-to-talk</span>
+</div>
+<div class="flow">
+  <span class="st">PASSIVE_MONITOR</span><span class="ar">→</span>
+  <span class="st">WATCH</span><span class="ar">→</span>
+  <span class="st">OFFER_HELP</span><span class="ar">→</span>
+  <span class="st">ACTIVE_MEDIATION</span><span class="ar">→</span>
+  <span class="st">RESOLVED</span><span class="ar">→</span>
+  <span class="st">PASSIVE_MONITOR</span>
+</div>
+<p class="muted">Emergency path from any state → SAFETY_ESCALATION.</p>
+
+<h2 id="arch">2. Architecture</h2>
+<pre>
+┌──────────────────┐                  ┌──────────────────┐
+│  Rider Web App   │◄── WebRTC Room ─►│ Driver Web App   │
+│  (React+LiveKit) │     LiveKit      │ (React+LiveKit)  │
+└───────┬──────────┘                  └─────────┬────────┘
+        │ audio + control WS events             │
+        └───────────────┬───────────────────────┘
+                        ▼
+          ┌────────────────────────────┐
+          │   Voice Orchestrator       │  FastAPI, hidden LiveKit participant
+          └─────────────┬──────────────┘
+       ┌────────────────┼────────────────┐
+       ▼                ▼                ▼
+┌────────────┐   ┌──────────────┐   ┌──────────────────┐
+│ Sarvam STT │   │ Drift Engine │   │ Task Mediator    │
+│ saaras:v3- │   │ rules + 30b  │   │ 105b-conversat.  │
+│ realtime   │   │ classifier   │   └──────┬───────────┘
+└────────────┘   └──────────────┘          │
+                              ┌────────────┴────────────┐
+                              ▼                         ▼
+                       ┌──────────────┐          ┌────────────┐
+                       │ Mayura       │          │ Bulbul v3  │
+                       │ translate    │          │ TTS (WS)   │
+                       └──────────────┘          └────────────┘
+</pre>
+<p><strong>MVP decision:</strong> LiveKit handles human↔human audio; the orchestrator subscribes as a hidden participant; agent TTS audio is sent over the control WS and played <em>locally in the target browser only</em> (targeted playback without agent-as-publisher complexity).</p>
+
+<h2 id="stack">3. Sarvam voice stack (researched Aug 2026)</h2>
+<table>
+<tr><th>Model</th><th>ID</th><th>Role</th><th>Key facts</th></tr>
+<tr><td><strong>Saaras v3</strong></td><td><code>saaras:v3-realtime</code></td><td>STT</td><td>23 langs, <code>language_code=auto</code>, live partials, ms-tunable VAD, <code>config.update</code> mid-call, 8/16 kHz PCM only, <code>stream_type=fast</code> for agents</td></tr>
+<tr><td><strong>Bulbul v3</strong></td><td><code>bulbul:v3</code></td><td>TTS</td><td>11 langs, 30+ voices, <strong>&lt;250 ms first-byte via WS</strong>, ≤500 chars/msg sweet spot, native script only, no server-side cancel</td></tr>
+<tr><td><strong>Sarvam-105B Conversations</strong></td><td><code>sarvam-105b-conversations</code></td><td>Mediator LLM</td><td>tuned for real-time dialogue; strict JSON ⚠️ verify (fallback <code>sarvam-105b</code>)</td></tr>
+<tr><td><strong>Sarvam-30B</strong></td><td><code>sarvam-30b</code></td><td>Drift classifier</td><td>64K ctx, cheaper/faster — the hot path fires every few turns</td></tr>
+<tr><td><strong>Mayura</strong></td><td><code>mayura</code></td><td>Translate</td><td><code>modern-colloquial</code>, <code>output_script=fully-native</code></td></tr>
+</table>
+<div class="callout ok"><strong>Why raw Model APIs, not Sarvam Voice Agents:</strong> the managed runtime assumes one-user ↔ one-agent and owns the turn loop; our silent-observer + two-party + custom escalation cannot be expressed there. We borrow its patterns (fast stream type, VAD barge-in), not its runtime.</div>
+<div class="callout"><strong>Latency budget:</strong> STT partial ~150–300 ms · VAD end ~300–400 ms · drift (30b) ~200–400 ms · mediator (105b-conv) ~400–800 ms · Mayura ~150–300 ms · TTS TTFB &lt;250 ms → <strong>~1.2–2.0 s speech-to-speech</strong>. Levers: LLM emits target-language text directly (drop Mayura hop); stream TTS from first sentence.</div>
+<div class="callout warn"><strong>Cost:</strong> STT ₹30–45/hr × 2 continuous streams ≈ ₹60–90 per session-hour vs ₹100 free credits. TTS ₹30/10k chars. Rate limits are per-account token-bucket; WS concurrency is a separate cap — we open 4 sockets/session.</div>
+
+<h2 id="session">4. Session &amp; transcript schema (LLD §2–3)</h2>
+<pre><code>{
+  "session_id": "s_8f2c",
+  "livekit_room": "bb-s_8f2c",
+  "state": "PASSIVE_MONITOR",
+  "drift": { "score": 0.0, "hard_trigger": null, "history": [...] },
+  "participants": { "rider": Participant, "driver": Participant },
+  "transcript": [ TranscriptTurn... ],       // append-only, finals only
+  "task": TaskState,
+  "turn_manager": {...},
+  "metrics": { "stt_ms": [], "llm_ms": [], "tts_ttfb_ms": [] }
+}
+
+Participant.lang_profile = {
+  "detected": [ {"lang":"hi-IN","count":7,"avg_conf":0.91} ],
+  "primary": "hi-IN",     // stable after ≥2 finals same lang, conf ≥ 0.7
+  "stable": true
+}
+
+TranscriptTurn = {
+  "turn_id": 14, "speaker": "driver",
+  "text": "ನಾನು ಗೇಟ್ ಒಂದರ ಹತ್ತಿರ ಇದ್ದೇನೆ",   // native script
+  "text_en": "I am near gate one",           // lazy, batched translate
+  "lang": "kn-IN", "confidence": 0.88,
+  "is_question": false, "ts_start": 132.4, "ts_end": 135.1
+}</code></pre>
+<p class="muted">Partials live in a scratch buffer and stream to UIs; only finals enter the transcript. <code>text_en</code> is filled in one batched call over the last-N window when the drift LLM or mediator runs — not per turn.</p>
+
+<h2 id="events">5. Browser ⇄ backend WebSocket events (LLD §4)</h2>
+<p>One control WS per browser: <code>wss://&lt;server&gt;/ws/{session_id}/{role}</code></p>
+<div class="grid2">
+<div>
+<h4>Client → server</h4>
+<table>
+<tr><th>type</th><th>notes</th></tr>
+<tr><td><code>join</code></td><td>after LiveKit join</td></tr>
+<tr><td><code>audio.chunk</code></td><td>fallback path only</td></tr>
+<tr><td><code>help.request</code></td><td>hard trigger</td></tr>
+<tr><td><code>barge_in</code></td><td>user spoke during agent audio</td></tr>
+<tr><td><code>tts.playback_done</code></td><td>closes agent-speaking window</td></tr>
+</table>
+</div>
+<div>
+<h4>Server → client</h4>
+<table>
+<tr><th>type</th><th>notes</th></tr>
+<tr><td><code>session.state</code></td><td>state + drift score</td></tr>
+<tr><td><code>transcript.partial / .final</code></td><td>live UI</td></tr>
+<tr><td><code>agent.joined</code></td><td>on → ACTIVE</td></tr>
+<tr><td><code>agent.utterance</code></td><td>subtitle, both sides</td></tr>
+<tr><td><code>agent.audio</code></td><td><strong>target side only</strong> (mp3 chunks)</td></tr>
+<tr><td><code>turn.grant / turn.wait</code></td><td>UI highlight / dim</td></tr>
+<tr><td><code>mediation.resolved</code></td><td>bilingual summary</td></tr>
+</table>
+</div>
+</div>
+<div class="callout"><strong>Targeted playback rule:</strong> audio goes only to the target's WS; the other side gets <code>turn.wait</code> + subtitle, so the audience still follows both halves.</div>
+
+<h2 id="sarvam-api">6. Sarvam API contracts (LLD §5)</h2>
+<p>Auth everywhere: header <code>api-subscription-key</code>. ⚠️ = verify exact key names against live API reference before coding.</p>
+<h3>STT realtime</h3>
+<pre><code>wss://api.sarvam.ai/speech-to-text-realtime/ws?language_code=auto&amp;model=saaras:v3-realtime
+
+→ {"type":"config","stream_type":"fast","mode":"transcribe",
+   "input_audio":{"encoding":"linear16","sample_rate":16000},
+   "vad":{"silence_duration_ms":400,"min_speech_duration_ms":120}}   ⚠️
+→ {"type":"audio","data":"&lt;b64 pcm, 100ms frames&gt;"}
+← speech.start / speech.end / transcript.partial / transcript.final
+→ {"type":"config.update", ...}   // PASSIVE→ACTIVE: silence 400→300ms, no reconnect</code></pre>
+<h3>Drift classifier — sarvam-30b, strict JSON</h3>
+<pre><code>{ "comprehension_failure": bool, "repeated_question": bool, "contradiction": bool,
+  "frustration": bool, "task_progressing": bool, "safety_concern": bool, "confidence": 0.0 }</code></pre>
+<h3>Mediator — sarvam-105b-conversations, strict JSON</h3>
+<pre><code>{ "action": "ASK_RIDER_PICKUP_POINT | ASK_RIDER_LANDMARK | ASK_DRIVER_LOCATION |
+             ASK_DRIVER_FEASIBILITY | ASK_DRIVER_ETA | CONFIRM_WITH_RIDER |
+             CONFIRM_WITH_DRIVER | SUMMARIZE_AND_EXIT | SAFETY_ESCALATE",
+  "target": "rider|driver|both", "utterance_en": "≤25 words",
+  "slots_update": {...}, "task_complete": false }</code></pre>
+<p class="muted">The app narrows the schema enum to the currently-allowed action set <em>and</em> validates the response; one re-prompt, then a deterministic scripted fallback.</p>
+<h3>TTS — bulbul:v3 WS</h3>
+<pre><code>wss://api.sarvam.ai/text-to-speech/ws?model=bulbul:v3
+→ {"type":"config","speaker":"&lt;per-lang&gt;","target_language_code":"hi-IN",
+   "pace":1.0,"output_audio_codec":"mp3","speech_sample_rate":24000}
+→ {"type":"text","text":"&lt;native script only, ≤500 chars&gt;"} → {"type":"flush"}</code></pre>
+<div class="callout risk"><strong>Barge-in:</strong> no server-side cancel exists. Browser stops playback locally; server abandons the utterance and drops + reopens that TTS socket (warm pool per participant+language).</div>
+
+<h2 id="slots">7. Task slot schema (LLD §6)</h2>
+<pre><code>slots: pickup_point · landmark · driver_location · rider_location · eta ·
+       otp (protected) · blocker · agreed_next_action
+required_for_resolution: [pickup_point, eta, agreed_next_action]
+resolution_rule: all required filled AND confirmed_by includes both roles</code></pre>
+<div class="callout warn"><strong>Entity protection:</strong> protected slots (OTP, gate numbers, vehicle no., amounts) are regex-extracted from the source turn and spliced into utterances verbatim — never rewritten by translation or the LLM.</div>
+
+<h2 id="drift">8. Drift engine (LLD §7)</h2>
+<table>
+<tr><th>#</th><th>Signal</th><th>Condition</th><th>Δ</th></tr>
+<tr><td>S1</td><td>lang_mismatch_stable</td><td>both profiles stable &amp; different (once)</td><td>+2.0</td></tr>
+<tr><td>S2</td><td>low_stt_confidence</td><td>final conf &lt; 0.6</td><td>+1.0</td></tr>
+<tr><td>S3</td><td>explicit_confusion</td><td>phrase table hit (per-language YAML)</td><td>+3.0</td></tr>
+<tr><td>S4</td><td>repeated_question</td><td>fuzzy sim &gt; 0.8 vs own prior question</td><td>+2.0</td></tr>
+<tr><td>S5</td><td>slots_stalled</td><td>≥6 turns, no required slot filled</td><td>+2.0</td></tr>
+<tr><td>S6</td><td>contradiction</td><td>slot conflicts with confirmed value</td><td>+2.0</td></tr>
+<tr><td>S7</td><td>silence_after_question</td><td>&gt;8 s</td><td>+1.0</td></tr>
+<tr><td>S8</td><td>frustration</td><td>keyword table hit</td><td>+2.0</td></tr>
+<tr><td>—</td><td>decay</td><td>clean turn</td><td>−1.0 (floor 0)</td></tr>
+</table>
+<pre><code>score ≥ 3 → WATCH        (classifier polling every 3rd turn)
+score ≥ 6 → OFFER_HELP   only if 30b confirms (comprehension_failure OR
+                          !task_progressing, conf ≥ 0.6)
+score ≥ 8 → ACTIVE_MEDIATION
+Hard: help button → OFFER_HELP · safety words → SAFETY_ESCALATION ·
+      3 consecutive S3/S4 turns → ACTIVE_MEDIATION
+Veto: classifier task_progressing=true @ conf ≥ 0.8 → score −2.0</code></pre>
+
+<h2 id="turns">9. Turn manager — ACTIVE_MEDIATION (LLD §8)</h2>
+<pre>
+┌─────────────┐ grant(X)  ┌──────────────┐ final from X ┌────────────┐
+│ AGENT_SPEAK │ ────────► │ WAIT_FOR(X)  │ ───────────► │ PROCESSING │
+└─────▲───────┘           └──────┬───────┘              └─────┬──────┘
+      │        timeout 12s: re-ask once, then other side      │
+      └──────────────── next utterance ◄──────────────────────┘
+</pre>
+<ul>
+<li>Allowed-action set computed from task state; the LLM chooses within it.</li>
+<li>Non-granted speaker's finals are transcribed and shown, but not fed to the mediator.</li>
+<li>Barge-in from the <em>granted</em> speaker = early answer, not an error.</li>
+<li>Exit: <code>task_complete</code> + app-verified resolution rule → SUMMARIZE_AND_EXIT → RESOLVED → PASSIVE_MONITOR (score reset, S1 suppressed 10 turns).</li>
+</ul>
+
+<h2 id="seq">10. End-to-end sequences (LLD §9)</h2>
+<div class="grid2">
+<div class="card"><h4>Passive turn (hot path, no LLM)</h4>
+<pre><code>LiveKit frame (48k)
+→ resample 16k PCM, 100ms
+→ stt_ws[speaker]
+← partial → browsers
+← final → transcript
+        → drift rules
+        → score&lt;3 ? done
+          : classifier path</code></pre></div>
+<div class="card"><h4>Mediation utterance (~1.2–2.0 s)</h4>
+<pre><code>turn_manager.next()
+→ allowed_actions(task)
+→ 105b-conv JSON   400–800ms
+→ validate action
+→ Mayura native    150–300ms
+→ splice protected entities
+→ Bulbul WS       &lt;250ms TTFB
+→ audio → target browser only
+→ playback_done → WAIT_FOR</code></pre></div>
+</div>
+
+<h2 id="fallbacks">11. Fallback ladder (LLD §10)</h2>
+<table>
+<tr><th>Trigger</th><th>Fallback (env-flag switchable, no redeploy)</th></tr>
+<tr><td>LiveKit server subscribe unstable</td><td><strong>F1</strong> browser mic → <code>audio.chunk</code> over control WS</td></tr>
+<tr><td>Streaming still flaky</td><td><strong>F2</strong> push-to-talk for mediation answers only</td></tr>
+<tr><td>STT realtime quota/latency</td><td><strong>F3</strong> 6-s chunked REST in passive; realtime only in ACTIVE</td></tr>
+<tr><td>TTS WS issues</td><td><strong>F4</strong> REST TTS, whole-clip playback</td></tr>
+<tr><td>105b-conversations no strict JSON</td><td><strong>F5</strong> <code>sarvam-105b</code> w/ schema, or regex-extract + retry</td></tr>
+</table>
+
+<h2 id="tech">12. Tech stack &amp; repo layout</h2>
+<table>
+<tr><th>Layer</th><th>Choice</th><th>Why</th></tr>
+<tr><td>Frontend</td><td>React 18 + Vite + TS + <code>livekit-client</code></td><td>fast scaffold, two-role single app</td></tr>
+<tr><td>Backend</td><td>Python 3.11 + FastAPI + uvicorn</td><td>async WS everywhere; LiveKit Python SDK mature</td></tr>
+<tr><td>Audio</td><td><code>livekit.rtc</code> AudioStream + <code>soxr</code></td><td>48k → 16k int16 mono resample</td></tr>
+<tr><td>Sarvam</td><td>raw <code>websockets</code> + <code>httpx</code></td><td>SDK may lag the realtime API</td></tr>
+<tr><td>State / deploy</td><td>in-process dict · local laptop (Railway backup)</td><td>MVP, zero-ops</td></tr>
+</table>
+<pre><code>basha-bridge/
+├── docs/  demo/script.md
+├── web/src/{App,livekit,controlWs,audioPlayer}.tsx? + ui/
+└── server/
+    main.py config.py
+    session/store.py        media/{livekit_sub,resample}.py
+    stt/saaras_ws.py        drift/{rules,classifier}.py
+    mediator/{turns,llm,task}.py   speak/{translate,bulbul_ws}.py
+    tests/{replays,spikes}/</code></pre>
+
+<h2 id="milestones">13. Milestones (~2 devs, 18 h)</h2>
+<table>
+<tr><th>M</th><th>Deliverable</th><th>Demoable checkpoint</th><th>Est</th></tr>
+<tr><td>M0</td><td>LiveKit room + FastAPI + control WS echo</td><td>live 2-party call</td><td>2 h</td></tr>
+<tr><td>M1</td><td>Hidden participant → resample → 2× Saaras WS</td><td><strong>live bilingual transcript</strong></td><td>3 h</td></tr>
+<tr><td>M2</td><td>Language profiles + drift rules + score badge</td><td>score rises on scripted confusion</td><td>2 h</td></tr>
+<tr><td>M3</td><td>Canned OFFER_HELP → Mayura → Bulbul, targeted</td><td><strong>agent speaks to one side only</strong></td><td>2 h</td></tr>
+<tr><td>M4</td><td>Mediator loop: JSON, turns, slots, resolution</td><td><strong>full scripted demo passes</strong></td><td>4 h</td></tr>
+<tr><td>M5</td><td>Barge-in, latency levers, classifier veto</td><td>robustness</td><td>3 h</td></tr>
+<tr><td>M6</td><td>Fallback flags + rehearsals + cue cards</td><td>demo insurance</td><td>2 h</td></tr>
+</table>
+<div class="callout warn"><strong>First 30 min of M1 — spike tests:</strong> (a) <code>saaras:v3-realtime</code> handshake + measure partial TTFB; (b) <code>sarvam-105b-conversations</code> with <code>response_format: json_schema</code>. If (b) fails → <code>MEDIATOR_MODEL=sarvam-105b</code> and move on.</div>
+
+<h2 id="code">14. Key code sketches</h2>
+<h4>Resampler + framer</h4>
+<pre><code>class Framer:  # 48k float32 → 16k int16 mono, 100ms (1600-sample) frames
+    def push(self, pcm48, channels):
+        mono = pcm48.reshape(-1, channels).mean(axis=1) if channels &gt; 1 else pcm48
+        ints = np.clip(soxr.resample(mono, 48000, 16000) * 32767, -32768, 32767).astype(np.int16)
+        self.buf = np.concatenate([self.buf, ints]); out = []
+        while len(self.buf) &gt;= 1600:
+            out.append(self.buf[:1600].tobytes()); self.buf = self.buf[1600:]
+        return out</code></pre>
+<h4>Mediator with schema-narrowed enum</h4>
+<pre><code>async def next_move(sess):
+    allowed = sess.turn_manager.allowed_actions()
+    schema = mediator_schema(allowed)          # enum narrowed to allowed set
+    for _ in range(2):
+        r = await chat(MEDIATOR_MODEL, build_prompt(sess, allowed),
+                       response_format={"type":"json_schema","json_schema":schema},
+                       temperature=0.2, max_tokens=200)
+        move = Move.parse(r)
+        if move.action in allowed: return move
+    return deterministic_fallback(allowed)     # scripted question, never stuck</code></pre>
+<h4>TTS warm-socket pool + barge-in</h4>
+<pre><code>class TtsPool:   # one warm WS per (participant, language)
+    async def speak(self, role, lang, text_native, on_chunk):
+        ws = await self._get_or_open(role, lang)
+        await ws.send({"type":"text","text":text_native}); await ws.send({"type":"flush"})
+    async def abandon(self, role, lang):       # barge-in: no server cancel
+        await self._close(role, lang)          # next speak() reopens</code></pre>
+<p class="muted">Frontend: MP3 chunks → MediaSource append; <code>stop()</code> detaches buffer instantly. Browser RMS-threshold VAD fires <code>barge_in</code> during agent playback.</p>
+
+<h2 id="prompts">15. Prompts (frozen after M4)</h2>
+<div class="grid2">
+<div class="card"><h4>Classifier (30b)</h4><p class="muted">"You judge whether a two-person service conversation is progressing. Answer only the JSON schema. Do not infer problems that aren't evidenced." + last-8 en turns, slots, language profiles.</p></div>
+<div class="card"><h4>Mediator (105b-conv)</h4><p class="muted">"You are a calm pickup coordinator. One short question or confirmation at a time, ≤25 words, no explanations. Choose only from ALLOWED_ACTIONS. Never alter OTPs, gate numbers, vehicle numbers."</p></div>
+</div>
+
+<h2 id="testing">16. Testing strategy</h2>
+<ul>
+<li><strong>Replay tests:</strong> record real STT final sequences in M1 → drift rules, turn manager, task store are pure functions over <code>tests/replays/*.jsonl</code> — no audio, no network.</li>
+<li><strong>Contract spikes:</strong> the two M1 spike scripts stay runnable to re-verify API shapes after any Sarvam changelog bump.</li>
+<li><strong>Latency harness:</strong> every Sarvam call timed → <code>/session/{id}/metrics</code> p50/p95, checked each rehearsal.</li>
+<li><strong>Chaos toggles:</strong> fake STT drop / TTS failure via env flags → prove F1–F5 engage.</li>
+</ul>
+
+<h2 id="runbook">17. Demo runbook (3-minute script)</h2>
+<pre><code>0:00 Both browsers join "bb-demo" · PASSIVE_MONITOR badge visible
+0:10 Rider (hi): "Bhaiya, main Gate 2 pe hoon, chai ki dukaan ke paas."
+0:20 Driver (kn): "ಗೊತ್ತಾಗ್ತಿಲ್ಲ, ಯಾವ ಗೇಟ್?"          → S1+S3, score 5, WATCH
+0:35 Rider repeats (S4) → score 7 → classifier confirms → OFFER_HELP
+0:45 Agent (both langs): "I can help coordinate…" · rider: "haan help karo"
+0:50 ACTIVE · agent→rider (hi): "Pickup gate aur ek landmark boliye."
+1:05 Rider answers → pickup_point + landmark filled
+1:15 Agent→driver (kn): confirm location, ask feasibility
+1:30 Driver: "ಆಯ್ತು, ಐದು ನಿಮಿಷ." → eta filled
+1:40 Confirm with rider → agreed_next_action
+1:50 Bilingual summary → RESOLVED → PASSIVE_MONITOR
+2:00 Buffer / barge-in showcase</code></pre>
+<table>
+<tr><th>Symptom</th><th>Action (≤10 s)</th></tr>
+<tr><td>No partials in UI</td><td><code>FALLBACK_AUDIO=ws_chunks</code>, refresh (F1)</td></tr>
+<tr><td>STT laggy</td><td>F3: chunked REST passive mode</td></tr>
+<tr><td>Agent audio silent</td><td>F4: REST TTS — narrate "higher-latency mode"</td></tr>
+<tr><td>Mediator JSON garbage</td><td>auto-falls back to scripted questions</td></tr>
+<tr><td>Everything on fire</td><td>F2 push-to-talk — mediation logic still shows</td></tr>
+</table>
+<div class="callout ok"><strong>Setup T−30:</strong> wired net or hotspot · two laptops + earphones (no echo) · metrics on third screen · one full scripted pass. <strong>The line that sells it:</strong> point at the badge — "the agent heard everything and said nothing until the conversation actually broke."</div>
+
+<h2 id="dod">18. Definition of done (MVP)</h2>
+<ul class="check">
+<li>Two browsers, live WebRTC call, no push-to-talk</li>
+<li>Live bilingual transcript with partials + per-speaker language badges</li>
+<li>Agent silent through a working conversation (no false positive ×3 rehearsals)</li>
+<li>Scripted confusion → OFFER_HELP → ACTIVE_MEDIATION with targeted audio</li>
+<li>Slots fill → bilingual summary → RESOLVED → back to silent</li>
+<li>Barge-in stops agent audio &lt; 300 ms</li>
+<li>p95 speech-to-speech ≤ 2.5 s on demo hardware</li>
+<li>All five fallback flags tested once</li>
+</ul>
+
+<footer>
+Basha Bridge · Sarvam Build-in-Hours · sources: HLD.md · LLD.md · implementation.md · sarvam-voice-stack.md · docs.sarvam.ai (Aug 2026)
+</footer>
+</main>
+</div>
+</body>
+</html>
